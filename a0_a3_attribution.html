@@ -1,0 +1,1076 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>A0 vs A3 Attribution Graph Analysis</title>
+<meta name="description" content="How memory phrasing changes tool-call decisions in Qwen3-8B: circuit-tracer attribution graphs for A0 (imperative) vs A3 (descriptive).">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;500;600&family=Noto+Serif+TC:wght@400;600&display=swap">
+<style>
+  /* Layout: one centered reading column of cards; charts fill the column width. */
+  :root {
+    --bg: #fcfcfb; --panel: #ffffff; --fg: #1d1d1b; --fg-muted: #5f5e58; --line: #e4e2dc;
+    --ok: #1a7f4b; --bad: #c23b3a;
+    --s0: #2a78d6; --s1: #eb6834; --s2: #1baf7a; --s3: #eda100; --s4: #e87ba4; --s5: #008300;
+    --grid: #ecebe6; --axis: #b9b7ae; --ref: #9a988f; --muted-mark: #c9c7bf;
+    --popover: #ffffff; --shadow: 0 4px 16px rgb(20 20 18 / 0.12);
+    --sans: "Noto Sans TC", "PingFang TC", "Microsoft JhengHei", system-ui, sans-serif;
+    --serif: "Noto Serif TC", "Songti TC", "PMingLiU", Georgia, serif;
+    color-scheme: light;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #1a1a19; --panel: #222220; --fg: #f0efec; --fg-muted: #b3b2a9; --line: #3a3936;
+      --ok: #4fbf7f; --bad: #ef6b6a;
+      --s0: #3987e5; --s1: #d95926; --s2: #199e70; --s3: #c98500; --s4: #d55181; --s5: #008300;
+      --grid: #2e2d2a; --axis: #5a5952; --ref: #7d7b73; --muted-mark: #4a4943;
+      --popover: #2a2a27; --shadow: 0 4px 16px rgb(0 0 0 / 0.5);
+      color-scheme: dark;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #1a1a19; --panel: #222220; --fg: #f0efec; --fg-muted: #b3b2a9; --line: #3a3936;
+    --ok: #4fbf7f; --bad: #ef6b6a;
+    --s0: #3987e5; --s1: #d95926; --s2: #199e70; --s3: #c98500; --s4: #d55181; --s5: #008300;
+    --grid: #2e2d2a; --axis: #5a5952; --ref: #7d7b73; --muted-mark: #4a4943;
+    --popover: #2a2a27; --shadow: 0 4px 16px rgb(0 0 0 / 0.5);
+    color-scheme: dark;
+  }
+  :root {
+    /* names the page's components already use */
+    --color-bg: var(--bg); --color-panel: var(--panel); --color-fg: var(--fg); --color-fg-muted: var(--fg-muted);
+    --color-border-line: var(--line); --color-ok: var(--ok); --color-bad: var(--bad);
+    --cds-chart-grid: var(--grid); --cds-chart-axis: var(--axis); --cds-chart-reference: var(--ref); --cds-chart-muted: var(--muted-mark);
+    --cds-surface-popover: var(--popover); --cds-border: var(--line); --cds-shadow-popover: var(--shadow); --cds-text-secondary: var(--fg-muted);
+    --font-anthropic-sans: var(--sans); --font-anthropic-serif: var(--serif);
+    --cds-font-size-caption: 0.8125rem; --cds-font-size-body: 0.9375rem; --cds-font-size-heading: 1.0625rem; --cds-font-size-title: 1.75rem;
+    --cds-font-weight-medium: 500;
+    --cds-gap-xs: 0.25rem; --cds-gap-sm: 0.5rem; --cds-gap-md: 1rem; --cds-gap-lg: 1.75rem;
+    --cds-pad-xs: 0.25rem; --cds-pad-sm: 0.5rem; --cds-pad-md: 0.875rem; --cds-pad-lg: 1.25rem;
+    --cds-radius: 6px; --cds-dur-slow: 240ms;
+  }
+  * { box-sizing: border-box; }
+  html { background: var(--bg); }
+  body { margin: 0; background: var(--bg); color: var(--fg); font-family: var(--sans); font-size: var(--cds-font-size-body); line-height: 1.5; -webkit-text-size-adjust: 100%; }
+  .page { max-width: 1120px; margin-inline: auto; padding-block: 2.5rem 4rem;
+    padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); }
+  .page code { font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace; font-size: 0.92em; background: var(--grid); padding: 0 0.25em; border-radius: 3px; }
+  .page h1, .page h2, .page h3 { text-wrap: balance; }
+  .page-foot { margin-top: 2.5rem; font-size: var(--cds-font-size-caption); color: var(--fg-muted); max-width: 70ch; }
+  .page :focus-visible { outline: 2px solid var(--fg); outline-offset: 2px; }
+  @media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }
+
+  .ct { display: flex; flex-direction: column; gap: var(--cds-gap-lg); font-family: var(--font-anthropic-sans); }
+  .ct-head { display: flex; flex-direction: column; gap: var(--cds-gap-sm); }
+  .ct-title { font-family: var(--font-anthropic-serif); font-weight: 400; font-size: var(--cds-font-size-title); margin: 0; text-wrap: balance; }
+  .ct-lede { margin: 0; color: var(--color-fg-muted); max-width: 70ch; line-height: 1.6; }
+  .ct .ct-lede b, .ct .ct-tile b { font-weight: 600; color: var(--color-fg); }
+  .ct-tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 12rem), 1fr)); gap: var(--cds-gap-md); }
+  .ct-tile { background: var(--color-panel); border: 1px solid var(--color-border-line); border-radius: var(--cds-radius); padding: var(--cds-pad-md) var(--cds-pad-lg); display: flex; flex-direction: column; gap: var(--cds-gap-xs); }
+  .ct-tile-label { font-size: var(--cds-font-size-caption); color: var(--color-fg-muted); display: flex; align-items: center; gap: var(--cds-gap-xs); }
+  .ct-tile-num { font-family: var(--font-anthropic-serif); font-size: var(--cds-font-size-title); font-variant-numeric: tabular-nums; }
+  .ct-tile-sub { font-size: var(--cds-font-size-caption); color: var(--color-fg-muted); font-variant-numeric: tabular-nums; }
+  .ct-glossary { display: flex; flex-direction: column; gap: var(--cds-gap-xs); max-width: 70ch; padding: var(--cds-pad-md) var(--cds-pad-lg); border: 1px solid var(--color-border-line); border-radius: var(--cds-radius); font-size: var(--cds-font-size-caption); color: var(--color-fg-muted); line-height: 1.6; }
+  .ct-glossary p { margin: 0; }
+  .ct .ct-glossary b { color: var(--color-fg); font-weight: 600; }
+  .ct-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 26rem), 1fr)); gap: var(--cds-gap-md); }
+  .ct-card { background: var(--color-panel); border: 1px solid var(--color-border-line); border-radius: var(--cds-radius); padding: var(--cds-pad-lg); display: flex; flex-direction: column; gap: var(--cds-gap-sm); min-width: 0; }
+  .ct-card h2 { margin: 0; font-size: var(--cds-font-size-heading); font-weight: var(--cds-font-weight-medium); }
+  .ct-note { margin: 0; font-size: var(--cds-font-size-caption); color: var(--color-fg-muted); line-height: 1.5; }
+  .ct-legend { display: flex; flex-wrap: wrap; gap: var(--cds-gap-xs) var(--cds-gap-md); font-size: var(--cds-font-size-caption); color: var(--color-fg-muted); }
+  .ct-legend span { display: inline-flex; align-items: center; gap: var(--cds-gap-xs); }
+  .ct-sw { width: 0.625rem; height: 0.625rem; border-radius: 2px; display: inline-block; }
+  .ct-sw.dot { border-radius: 50%; }
+  .ct-chart { position: relative; min-height: 12rem; }
+  .ct-chart svg { display: block; overflow: visible; }
+  .ct-chart text { fill: var(--color-fg-muted); font-size: var(--cds-font-size-caption); font-family: var(--font-anthropic-sans); }
+  .ct-chart text.ct-strong { fill: var(--color-fg); }
+  .ct-sub { font-size: var(--cds-font-size-caption); color: var(--color-fg-muted); margin: 0; }
+  .ct-tip { position: absolute; pointer-events: none; background: var(--cds-surface-popover); border: 1px solid var(--cds-border); border-radius: var(--cds-radius); box-shadow: var(--cds-shadow-popover); padding: var(--cds-pad-xs) var(--cds-pad-sm); font-size: var(--cds-font-size-caption); white-space: nowrap; z-index: 2; font-variant-numeric: tabular-nums; }
+  .ct-tip .k { color: var(--cds-text-secondary); }
+  .ct-table-box { overflow: auto; max-height: 28rem; }
+  .ct-table { width: 100%; border-collapse: collapse; font-size: var(--cds-font-size-caption); font-variant-numeric: tabular-nums; }
+  .ct-table th, .ct-table td { padding: var(--cds-pad-xs) var(--cds-pad-sm); text-align: right; border-bottom: 1px solid var(--color-border-line); }
+  .ct-table th:first-child, .ct-table td:first-child { text-align: left; }
+  .ct-table th { position: sticky; top: 0; background: var(--color-panel); color: var(--color-fg-muted); font-weight: var(--cds-font-weight-medium); }
+  .ct-pos { color: var(--color-ok); }
+  .ct-neg { color: var(--color-bad); }
+  .ct-up { display: flex; flex-direction: column; gap: var(--cds-gap-md); }
+  .ct-section { margin: 0; font-family: var(--font-anthropic-serif); font-weight: 400; font-size: var(--cds-font-size-title); }
+  .ct-subsection { margin: var(--cds-gap-sm) 0 0; font-size: var(--cds-font-size-heading); font-weight: var(--cds-font-weight-medium); }
+  .ct-setup { margin: 0; display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 18rem), 1fr)); gap: var(--cds-gap-sm) var(--cds-gap-lg); font-size: var(--cds-font-size-caption); }
+  .ct-setup div { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+  .ct-setup dt { color: var(--color-fg); font-weight: var(--cds-font-weight-medium); }
+  .ct-setup dd { margin: 0; color: var(--color-fg-muted); line-height: 1.5; overflow-wrap: anywhere; }
+  .ct-controls { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--cds-gap-sm); }
+  .ct-seg { display: inline-flex; border: 1px solid var(--color-border-line); border-radius: var(--cds-radius); overflow: hidden; }
+  .ct-seg-btn { font: inherit; font-size: var(--cds-font-size-caption); padding: var(--cds-pad-xs) var(--cds-pad-sm); background: transparent; color: var(--color-fg-muted); border: 0; cursor: pointer; }
+  .ct-seg-btn + .ct-seg-btn { border-left: 1px solid var(--color-border-line); }
+  .ct-seg-btn[aria-pressed="true"] { background: var(--color-bg); color: var(--color-fg); font-weight: var(--cds-font-weight-medium); }
+  .ct-seg-btn:focus-visible { outline: 2px solid var(--color-fg); outline-offset: -2px; }
+  .ct-line { width: 1.25rem; height: 0; border-top: 2px solid var(--color-fg-muted); display: inline-block; }
+  .ct-line.dash { border-top-style: dashed; border-top-color: var(--color-bad); }
+  .ct-list { margin: 0; padding-left: 1.2rem; display: flex; flex-direction: column; gap: var(--cds-gap-xs); font-size: var(--cds-font-size-caption); color: var(--color-fg-muted); line-height: 1.6; max-width: 80ch; }
+  .ct .ct-list b { color: var(--color-fg); font-weight: 600; }
+  .ct-chart .ct-node-label { font-size: 10px; paint-order: stroke; stroke: var(--color-panel); stroke-width: 3px; stroke-linejoin: round; }
+  [data-dash-source-state=empty] { color: transparent; }
+  [data-dash-source-state=refreshing] { opacity: .5; transition: opacity var(--cds-dur-slow); }
+  .lang-bar { display: flex; justify-content: flex-end; margin-bottom: var(--cds-gap-sm); }
+  .lang-btn { font: inherit; font-size: var(--cds-font-size-caption); color: var(--fg); background: var(--panel); border: 1px solid var(--line);
+    border-radius: 999px; padding: 0.3rem 0.85rem; cursor: pointer; display: inline-flex; align-items: center; gap: 0.4rem; }
+  .lang-btn:hover { border-color: var(--fg-muted); }
+  .lang-btn .lang-alt { color: var(--fg-muted); }
+</style>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/d3/7.8.5/d3.min.js"></script>
+<script type="application/json" id="page-data">{"behavior": {"columns": ["set", "label", "p_call", "p_nocall", "logit_diff", "graph_direct_sum"], "rows": [{"set": "A0", "label": "A0 原始命令句", "p_call": "0.9627", "p_nocall": "0.0373", "logit_diff": "3.25", "graph_direct_sum": "1.191"}, {"set": "A3", "label": "A3 描述語氣", "p_call": "0.0759", "p_nocall": "0.9241", "logit_diff": "-2.5", "graph_direct_sum": "-5.512"}]}, "top_features": {"columns": ["feature", "layer", "a0_direct", "a3_direct", "change", "a0_act", "a3_act"], "rows": [{"feature": "L28#21276", "layer": "28", "a0_direct": "-4.02", "a3_direct": "-4.523", "change": "-0.504", "a0_act": "55.75", "a3_act": "65.0"}, {"feature": "L34#145627", "layer": "34", "a0_direct": "2.441", "a3_direct": "2.531", "change": "0.09", "a0_act": "290.0", "a3_act": "318.0"}, {"feature": "L31#123975", "layer": "31", "a0_direct": "2.319", "a3_direct": "2.01", "change": "-0.31", "a0_act": "54.0", "a3_act": "47.25"}, {"feature": "L34#76578", "layer": "34", "a0_direct": "-1.758", "a3_direct": "-1.754", "change": "0.004", "a0_act": "211.0", "a3_act": "221.0"}, {"feature": "L30#14723", "layer": "30", "a0_direct": "-1.458", "a3_direct": "-1.373", "change": "0.085", "a0_act": "66.5", "a3_act": "63.5"}, {"feature": "L29#6209", "layer": "29", "a0_direct": "1.438", "a3_direct": "1.375", "change": "-0.062", "a0_act": "67.5", "a3_act": "67.0"}, {"feature": "L30#57609", "layer": "30", "a0_direct": "-1.176", "a3_direct": "-1.383", "change": "-0.207", "a0_act": "53.25", "a3_act": "65.0"}, {"feature": "L29#4697", "layer": "29", "a0_direct": "0.947", "a3_direct": "1.112", "change": "0.165", "a0_act": "33.75", "a3_act": "40.25"}, {"feature": "L30#107948", "layer": "30", "a0_direct": "-1.004", "a3_direct": "-1.09", "change": "-0.086", "a0_act": "31.88", "a3_act": "34.25"}, {"feature": "L30#21074", "layer": "30", "a0_direct": "0.926", "a3_direct": "0.83", "change": "-0.096", "a0_act": "39.5", "a3_act": "36.75"}, {"feature": "L35#131022", "layer": "35", "a0_direct": "-0.865", "a3_direct": "-0.9", "change": "-0.035", "a0_act": "65.0", "a3_act": "70.0"}, {"feature": "L29#78211", "layer": "29", "a0_direct": "-0.541", "a3_direct": "-0.883", "change": "-0.342", "a0_act": "26.25", "a3_act": "44.5"}, {"feature": "L28#75585", "layer": "28", "a0_direct": "-0.676", "a3_direct": "-0.83", "change": "-0.154", "a0_act": "19.62", "a3_act": "23.75"}, {"feature": "L25#109686", "layer": "25", "a0_direct": "-0.793", "a3_direct": "-0.785", "change": "0.008", "a0_act": "36.75", "a3_act": "37.75"}, {"feature": "L32#41974", "layer": "32", "a0_direct": "0.742", "a3_direct": "0.625", "change": "-0.117", "a0_act": "48.0", "a3_act": "41.25"}, {"feature": "L27#26732", "layer": "27", "a0_direct": "-0.705", "a3_direct": "-0.736", "change": "-0.031", "a0_act": "18.25", "a3_act": "18.62"}, {"feature": "L35#157960", "layer": "35", "a0_direct": "0.436", "a3_direct": "0.68", "change": "0.244", "a0_act": "60.5", "a3_act": "98.0"}, {"feature": "L31#42351", "layer": "31", "a0_direct": "-0.504", "a3_direct": "-0.665", "change": "-0.161", "a0_act": "17.88", "a3_act": "23.75"}, {"feature": "L30#130010", "layer": "30", "a0_direct": "-0.589", "a3_direct": "-0.655", "change": "-0.067", "a0_act": "12.94", "a3_act": "13.69"}, {"feature": "L33#87416", "layer": "33", "a0_direct": "-0.633", "a3_direct": "-0.398", "change": "0.234", "a0_act": "19.25", "a3_act": "12.38"}]}, "gap_waterfall": {"columns": ["order", "step", "label", "kind", "value", "from", "to"], "rows": [{"order": "0", "step": "start", "label": "A0 總和（圖內）", "kind": "total", "value": "1.191", "from": "0", "to": "1.191"}, {"order": "1", "step": "shared", "label": "共有 feature 的變化", "kind": "step", "value": "-3.266", "from": "1.191", "to": "-2.075"}, {"order": "2", "step": "a3_only", "label": "僅 A3 啟動的 feature", "kind": "step", "value": "-3.194", "from": "-2.075", "to": "-5.269"}, {"order": "3", "step": "a0_only", "label": "僅 A0 啟動的 feature（移除）", "kind": "step", "value": "0.388", "from": "-5.269", "to": "-4.882"}, {"order": "4", "step": "error", "label": "MLP 誤差節點的變化", "kind": "step", "value": "-0.655", "from": "-4.882", "to": "-5.536"}, {"order": "5", "step": "embedding", "label": "embedding 的變化", "kind": "step", "value": "0.024", "from": "-5.536", "to": "-5.512"}, {"order": "6", "step": "end", "label": "A3 總和（圖內）", "kind": "total", "value": "-5.512", "from": "0", "to": "-5.512"}]}, "region_effect": {"columns": ["set", "region", "region_label", "node_type", "direct"], "rows": [{"set": "A0", "region": "last", "region_label": "最後 token", "node_type": "transcoder feature", "direct": "-1.192"}, {"set": "A0", "region": "last", "region_label": "最後 token", "node_type": "MLP 誤差", "direct": "2.949"}, {"set": "A0", "region": "asst", "region_label": "assistant 開頭", "node_type": "transcoder feature", "direct": "0.652"}, {"set": "A0", "region": "asst", "region_label": "assistant 開頭", "node_type": "MLP 誤差", "direct": "0.606"}, {"set": "A0", "region": "memory", "region_label": "記憶段落", "node_type": "transcoder feature", "direct": "0.407"}, {"set": "A0", "region": "memory", "region_label": "記憶段落", "node_type": "MLP 誤差", "direct": "0.508"}, {"set": "A0", "region": "turn2", "region_label": "Turn 2 其他", "node_type": "transcoder feature", "direct": "0.156"}, {"set": "A0", "region": "turn2", "region_label": "Turn 2 其他", "node_type": "MLP 誤差", "direct": "0.313"}, {"set": "A0", "region": "harness", "region_label": "harness 說明", "node_type": "transcoder feature", "direct": "-1.796"}, {"set": "A0", "region": "harness", "region_label": "harness 說明", "node_type": "MLP 誤差", "direct": "-1.511"}, {"set": "A3", "region": "last", "region_label": "最後 token", "node_type": "transcoder feature", "direct": "-4.906"}, {"set": "A3", "region": "last", "region_label": "最後 token", "node_type": "MLP 誤差", "direct": "3.184"}, {"set": "A3", "region": "asst", "region_label": "assistant 開頭", "node_type": "transcoder feature", "direct": "-0.413"}, {"set": "A3", "region": "asst", "region_label": "assistant 開頭", "node_type": "MLP 誤差", "direct": "0.304"}, {"set": "A3", "region": "memory", "region_label": "記憶段落", "node_type": "transcoder feature", "direct": "0.137"}, {"set": "A3", "region": "memory", "region_label": "記憶段落", "node_type": "MLP 誤差", "direct": "0.269"}, {"set": "A3", "region": "turn2", "region_label": "Turn 2 其他", "node_type": "transcoder feature", "direct": "-0.2"}, {"set": "A3", "region": "turn2", "region_label": "Turn 2 其他", "node_type": "MLP 誤差", "direct": "0.124"}, {"set": "A3", "region": "harness", "region_label": "harness 說明", "node_type": "transcoder feature", "direct": "-2.463"}, {"set": "A3", "region": "harness", "region_label": "harness 說明", "node_type": "MLP 誤差", "direct": "-1.671"}]}, "edge_share": {"columns": ["set", "label", "region", "region_label", "share"], "rows": [{"set": "A0", "label": "A0 原始命令句", "region": "asst", "region_label": "assistant 開頭", "share": "0.5047"}, {"set": "A0", "label": "A0 原始命令句", "region": "harness", "region_label": "harness 說明", "share": "0.3529"}, {"set": "A0", "label": "A0 原始命令句", "region": "turn2", "region_label": "Turn 2 其他", "share": "0.1032"}, {"set": "A0", "label": "A0 原始命令句", "region": "memory", "region_label": "記憶段落", "share": "0.0392"}, {"set": "A3", "label": "A3 描述語氣", "region": "asst", "region_label": "assistant 開頭", "share": "0.5173"}, {"set": "A3", "label": "A3 描述語氣", "region": "harness", "region_label": "harness 說明", "share": "0.344"}, {"set": "A3", "label": "A3 描述語氣", "region": "turn2", "region_label": "Turn 2 其他", "share": "0.1154"}, {"set": "A3", "label": "A3 描述語氣", "region": "memory", "region_label": "記憶段落", "share": "0.0234"}]}, "upstream_target": {"columns": ["target", "feature", "side", "set", "activation", "input_sum", "direct"], "rows": [{"target": "L28_21276", "feature": "L28#21276", "side": "不呼叫", "set": "A0", "activation": "55.75", "input_sum": "60.78", "direct": "-4.02"}, {"target": "L28_21276", "feature": "L28#21276", "side": "不呼叫", "set": "A3", "activation": "65.0", "input_sum": "73.55", "direct": "-4.523"}, {"target": "L34_145627", "feature": "L34#145627", "side": "呼叫", "set": "A0", "activation": "290.0", "input_sum": "131.08", "direct": "2.441"}, {"target": "L34_145627", "feature": "L34#145627", "side": "呼叫", "set": "A3", "activation": "318.0", "input_sum": "154.36", "direct": "2.531"}]}, "upstream_region": {"columns": ["target", "set", "region", "feature", "error", "token", "total"], "rows": [{"target": "L28_21276", "set": "A0", "region": "最後 token", "feature": "27.977", "error": "12.133", "token": "-0.064", "total": "40.046"}, {"target": "L28_21276", "set": "A0", "region": "assistant 開頭", "feature": "5.54", "error": "1.634", "token": "-0.178", "total": "6.996"}, {"target": "L28_21276", "set": "A0", "region": "記憶段落", "feature": "0.109", "error": "-1.799", "token": "-0.058", "total": "-1.748"}, {"target": "L28_21276", "set": "A0", "region": "Turn 2 其他", "feature": "-0.419", "error": "1.715", "token": "-0.027", "total": "1.269"}, {"target": "L28_21276", "set": "A0", "region": "harness 說明", "feature": "11.466", "error": "3.027", "token": "-0.273", "total": "14.22"}, {"target": "L28_21276", "set": "A3", "region": "最後 token", "feature": "34.343", "error": "11.766", "token": "-0.062", "total": "46.047"}, {"target": "L28_21276", "set": "A3", "region": "assistant 開頭", "feature": "6.534", "error": "3.557", "token": "-0.196", "total": "9.895"}, {"target": "L28_21276", "set": "A3", "region": "記憶段落", "feature": "0.057", "error": "-0.067", "token": "-0.112", "total": "-0.122"}, {"target": "L28_21276", "set": "A3", "region": "Turn 2 其他", "feature": "-0.129", "error": "1.572", "token": "-0.039", "total": "1.404"}, {"target": "L28_21276", "set": "A3", "region": "harness 說明", "feature": "13.087", "error": "3.517", "token": "-0.281", "total": "16.323"}, {"target": "L34_145627", "set": "A0", "region": "最後 token", "feature": "103.286", "error": "27.187", "token": "0.149", "total": "130.622"}, {"target": "L34_145627", "set": "A0", "region": "assistant 開頭", "feature": "-2.65", "error": "-2.472", "token": "0.203", "total": "-4.919"}, {"target": "L34_145627", "set": "A0", "region": "記憶段落", "feature": "0.112", "error": "-0.534", "token": "0.358", "total": "-0.064"}, {"target": "L34_145627", "set": "A0", "region": "Turn 2 其他", "feature": "1.997", "error": "-5.02", "token": "0.121", "total": "-2.902"}, {"target": "L34_145627", "set": "A0", "region": "harness 說明", "feature": "7.595", "error": "-1.34", "token": "2.084", "total": "8.339"}, {"target": "L34_145627", "set": "A3", "region": "最後 token", "feature": "124.052", "error": "30.598", "token": "0.142", "total": "154.792"}, {"target": "L34_145627", "set": "A3", "region": "assistant 開頭", "feature": "-3.163", "error": "-2.364", "token": "0.274", "total": "-5.253"}, {"target": "L34_145627", "set": "A3", "region": "記憶段落", "feature": "0.193", "error": "0.203", "token": "0.368", "total": "0.764"}, {"target": "L34_145627", "set": "A3", "region": "Turn 2 其他", "feature": "2.165", "error": "-4.733", "token": "0.079", "total": "-2.489"}, {"target": "L34_145627", "set": "A3", "region": "harness 說明", "feature": "5.777", "error": "-1.155", "token": "1.928", "total": "6.55"}]}, "upstream_sources": {"columns": ["target", "source", "kind", "region", "token", "a0", "a3", "change", "a0_act", "a3_act"], "rows": [{"target": "L28_21276", "source": "L27#41770", "kind": "feature", "region": "最後 token", "token": "\":", "a0": "-6.5", "a3": "-9.0", "change": "-2.5", "a0_act": "13.62", "a3_act": "18.62"}, {"target": "L28_21276", "source": "L26#16816", "kind": "feature", "region": "最後 token", "token": "\":", "a0": "1.812", "a3": "3.453", "change": "1.641", "a0_act": "4.75", "a3_act": "8.94"}, {"target": "L28_21276", "source": "L27#62878", "kind": "feature", "region": "最後 token", "token": "\":", "a0": "0.311", "a3": "1.57", "change": "1.26", "a0_act": "2.06", "a3_act": "10.25"}, {"target": "L28_21276", "source": "L25#18423", "kind": "feature", "region": "最後 token", "token": "\":", "a0": "0.0", "a3": "0.871", "change": "0.871", "a0_act": "0.0", "a3_act": "3.52"}, {"target": "L28_21276", "source": "誤差 L24", "kind": "error", "region": "最後 token", "token": "\":", "a0": "-0.229", "a3": "0.625", "change": "0.854", "a0_act": "0.0", "a3_act": "0.0"}, {"target": "L28_21276", "source": "L27#116704", "kind": "feature", "region": "最後 token", "token": "\":", "a0": "2.5", "a3": "3.281", "change": "0.781", "a0_act": "13.25", "a3_act": "17.12"}, {"target": "L28_21276", "source": "L25#9580", "kind": "feature", "region": "最後 token", "token": "\":", "a0": "-0.605", "a3": "-1.328", "change": "-0.723", "a0_act": "2.84", "a3_act": "6.16"}, {"target": "L28_21276", "source": "誤差 L26", "kind": "error", "region": "最後 token", "token": "\":", "a0": "6.031", "a3": "5.312", "change": "-0.719", "a0_act": "0.0", "a3_act": "0.0"}, {"target": "L28_21276", "source": "誤差 L21", "kind": "error", "region": "最後 token", "token": "\":", "a0": "2.641", "a3": "2.031", "change": "-0.609", "a0_act": "0.0", "a3_act": "0.0"}, {"target": "L28_21276", "source": "L25#62895", "kind": "feature", "region": "最後 token", "token": "\":", "a0": "0.625", "a3": "1.211", "change": "0.586", "a0_act": "3.75", "a3_act": "7.22"}, {"target": "L28_21276", "source": "L23#130527", "kind": "feature", "region": "最後 token", "token": "\":", "a0": "0.992", "a3": "1.57", "change": "0.578", "a0_act": "4.03", "a3_act": "6.34"}, {"target": "L28_21276", "source": "L26#91112", "kind": "feature", "region": "最後 token", "token": "\":", "a0": "0.762", "a3": "1.336", "change": "0.574", "a0_act": "4.75", "a3_act": "8.25"}, {"target": "L28_21276", "source": "L26#150551", "kind": "feature", "region": "最後 token", "token": "\":", "a0": "3.156", "a3": "3.719", "change": "0.562", "a0_act": "7.81", "a3_act": "9.06"}, {"target": "L28_21276", "source": "L25#116802", "kind": "feature", "region": "最後 token", "token": "\":", "a0": "1.703", "a3": "2.266", "change": "0.562", "a0_act": "5.56", "a3_act": "7.31"}, {"target": "L28_21276", "source": "L23#117270", "kind": "feature", "region": "最後 token", "token": "\":", "a0": "0.0", "a3": "0.512", "change": "0.512", "a0_act": "0.0", "a3_act": "1.73"}, {"target": "L28_21276", "source": "誤差 L22", "kind": "error", "region": "最後 token", "token": "\":", "a0": "-4.875", "a3": "-4.375", "change": "0.5", "a0_act": "0.0", "a3_act": "0.0"}, {"target": "L28_21276", "source": "L23#151692 · harness []", "kind": "feature", "region": "harness 說明", "token": " []\\n", "a0": "2.406", "a3": "2.734", "change": "0.328", "a0_act": "28.12", "a3_act": "27.88"}, {"target": "L34_145627", "source": "L33#37199", "kind": "feature", "region": "最後 token", "token": "\":", "a0": "2.719", "a3": "8.75", "change": "6.031", "a0_act": "6.16", "a3_act": "20.0"}, {"target": "L34_145627", "source": "L30#133299", "kind": "feature", "region": "最後 token", "token": "\":", "a0": "13.688", "a3": "18.5", "change": "4.812", "a0_act": "38.0", "a3_act": "51.25"}, {"target": "L34_145627", "source": "誤差 L30", "kind": "error", "region": "最後 token", "token": "\":", "a0": "-3.109", "a3": "1.211", "change": "4.32", "a0_act": "0.0", "a3_act": "0.0"}, {"target": "L34_145627", "source": "L31#148283", "kind": "feature", "region": "最後 token", "token": "\":", "a0": "0.204", "a3": "4.062", "change": "3.858", "a0_act": "0.52", "a3_act": "10.25"}, {"target": "L34_145627", "source": "誤差 L33", "kind": "error", "region": "最後 token", "token": "\":", "a0": "23.0", "a3": "20.0", "change": "-3.0", "a0_act": "0.0", "a3_act": "0.0"}, {"target": "L34_145627", "source": "誤差 L29", "kind": "error", "region": "最後 token", "token": "\":", "a0": "-0.645", "a3": "2.312", "change": "2.957", "a0_act": "0.0", "a3_act": "0.0"}, {"target": "L34_145627", "source": "L32#5477", "kind": "feature", "region": "最後 token", "token": "\":", "a0": "1.203", "a3": "4.062", "change": "2.859", "a0_act": "3.56", "a3_act": "12.25"}, {"target": "L34_145627", "source": "L33#147839", "kind": "feature", "region": "最後 token", "token": "\":", "a0": "-0.934", "a3": "-3.562", "change": "-2.629", "a0_act": "3.11", "a3_act": "12.0"}, {"target": "L34_145627", "source": "誤差 L24", "kind": "error", "region": "最後 token", "token": "\":", "a0": "0.766", "a3": "-1.305", "change": "-2.07", "a0_act": "0.0", "a3_act": "0.0"}, {"target": "L34_145627", "source": "誤差 L32", "kind": "error", "region": "最後 token", "token": "\":", "a0": "-13.75", "a3": "-12.125", "change": "1.625", "a0_act": "0.0", "a3_act": "0.0"}, {"target": "L34_145627", "source": "L31#162547", "kind": "feature", "region": "最後 token", "token": "\":", "a0": "0.0", "a3": "1.539", "change": "1.539", "a0_act": "0.0", "a3_act": "10.94"}, {"target": "L34_145627", "source": "L33#30939", "kind": "feature", "region": "最後 token", "token": "\":", "a0": "0.0", "a3": "1.406", "change": "1.406", "a0_act": "0.0", "a3_act": "3.7"}, {"target": "L34_145627", "source": "誤差 L25", "kind": "error", "region": "最後 token", "token": "\":", "a0": "5.25", "a3": "3.859", "change": "-1.391", "a0_act": "0.0", "a3_act": "0.0"}, {"target": "L34_145627", "source": "誤差 L28", "kind": "error", "region": "最後 token", "token": "\":", "a0": "5.594", "a3": "4.219", "change": "-1.375", "a0_act": "0.0", "a3_act": "0.0"}, {"target": "L34_145627", "source": "誤差 L27", "kind": "error", "region": "最後 token", "token": "\":", "a0": "-6.719", "a3": "-5.406", "change": "1.312", "a0_act": "0.0", "a3_act": "0.0"}, {"target": "L34_145627", "source": "L32#124599", "kind": "feature", "region": "最後 token", "token": "\":", "a0": "9.188", "a3": "7.906", "change": "-1.281", "a0_act": "47.5", "a3_act": "41.75"}]}, "circuit_nodes": {"columns": ["id", "kind", "layer", "feature", "label", "a0_present", "a0_act", "a0_prob", "a0_direct", "a0_pos", "token", "a3_present", "a3_act", "a3_prob", "a3_direct", "a3_pos", "region"], "rows": [{"id": "call", "kind": "logit", "layer": "36", "feature": "logit", "label": "[ 呼叫", "a0_present": "1", "a0_act": "", "a0_prob": "0.9688", "a0_direct": "", "a0_pos": "509", "token": "\":", "a3_present": "1", "a3_act": "", "a3_prob": "0.0757", "a3_direct": "", "a3_pos": "503", "region": "last"}, {"id": "nocall", "kind": "logit", "layer": "36", "feature": "logit", "label": "[] 不呼叫", "a0_present": "1", "a0_act": "", "a0_prob": "0.0293", "a0_direct": "", "a0_pos": "509", "token": "\":", "a3_present": "1", "a3_act": "", "a3_prob": "0.9258", "a3_direct": "", "a3_pos": "503", "region": "last"}, {"id": "23_151692_abs159", "kind": "feature", "layer": "23", "feature": "L23#151692", "label": "L23#151692", "a0_present": "1", "a0_act": "28.125", "a0_prob": "", "a0_direct": "-0.2", "a0_pos": "159", "token": " []\\n", "a3_present": "1", "a3_act": "27.875", "a3_prob": "", "a3_direct": "-0.216", "a3_pos": "159", "region": "harness"}, {"id": "24_81436_rev0", "kind": "feature", "layer": "24", "feature": "L24#81436", "label": "L24#81436", "a0_present": "1", "a0_act": "29.5", "a0_prob": "", "a0_direct": "-0.312", "a0_pos": "509", "token": "\":", "a3_present": "1", "a3_act": "31.875", "a3_prob": "", "a3_direct": "-0.332", "a3_pos": "503", "region": "last"}, {"id": "25_109686_rev0", "kind": "feature", "layer": "25", "feature": "L25#109686", "label": "L25#109686", "a0_present": "1", "a0_act": "36.75", "a0_prob": "", "a0_direct": "-0.793", "a0_pos": "509", "token": "\":", "a3_present": "1", "a3_act": "37.75", "a3_prob": "", "a3_direct": "-0.785", "a3_pos": "503", "region": "last"}, {"id": "25_128227_rev0", "kind": "feature", "layer": "25", "feature": "L25#128227", "label": "L25#128227", "a0_present": "1", "a0_act": "36.5", "a0_prob": "", "a0_direct": "0.236", "a0_pos": "509", "token": "\":", "a3_present": "1", "a3_act": "34.75", "a3_prob": "", "a3_direct": "0.227", "a3_pos": "503", "region": "last"}, {"id": "25_151707_rev0", "kind": "feature", "layer": "25", "feature": "L25#151707", "label": "L25#151707", "a0_present": "1", "a0_act": "49.25", "a0_prob": "", "a0_direct": "0.449", "a0_pos": "509", "token": "\":", "a3_present": "1", "a3_act": "44.75", "a3_prob": "", "a3_direct": "0.385", "a3_pos": "503", "region": "last"}, {"id": "26_150551_rev0", "kind": "feature", "layer": "26", "feature": "L26#150551", "label": "L26#150551", "a0_present": "1", "a0_act": "7.812", "a0_prob": "", "a0_direct": "-0.179", "a0_pos": "509", "token": "\":", "a3_present": "1", "a3_act": "9.062", "a3_prob": "", "a3_direct": "-0.202", "a3_pos": "503", "region": "last"}, {"id": "26_51615_rev0", "kind": "feature", "layer": "26", "feature": "L26#51615", "label": "L26#51615", "a0_present": "1", "a0_act": "34.5", "a0_prob": "", "a0_direct": "0.295", "a0_pos": "509", "token": "\":", "a3_present": "1", "a3_act": "32.5", "a3_prob": "", "a3_direct": "0.282", "a3_pos": "503", "region": "last"}, {"id": "27_41770_rev0", "kind": "feature", "layer": "27", "feature": "L27#41770", "label": "L27#41770", "a0_present": "1", "a0_act": "13.625", "a0_prob": "", "a0_direct": "0.323", "a0_pos": "509", "token": "\":", "a3_present": "1", "a3_act": "18.625", "a3_prob": "", "a3_direct": "0.434", "a3_pos": "503", "region": "last"}, {"id": "28_109390_rev0", "kind": "feature", "layer": "28", "feature": "L28#109390", "label": "L28#109390", "a0_present": "1", "a0_act": "15.75", "a0_prob": "", "a0_direct": "0.455", "a0_pos": "509", "token": "\":", "a3_present": "1", "a3_act": "10.625", "a3_prob": "", "a3_direct": "0.3", "a3_pos": "503", "region": "last"}, {"id": "28_21276_rev0", "kind": "feature", "layer": "28", "feature": "L28#21276", "label": "L28#21276", "a0_present": "1", "a0_act": "55.75", "a0_prob": "", "a0_direct": "-4.02", "a0_pos": "509", "token": "\":", "a3_present": "1", "a3_act": "65.0", "a3_prob": "", "a3_direct": "-4.523", "a3_pos": "503", "region": "last"}, {"id": "28_75585_rev0", "kind": "feature", "layer": "28", "feature": "L28#75585", "label": "L28#75585", "a0_present": "1", "a0_act": "19.625", "a0_prob": "", "a0_direct": "-0.676", "a0_pos": "509", "token": "\":", "a3_present": "1", "a3_act": "23.75", "a3_prob": "", "a3_direct": "-0.83", "a3_pos": "503", "region": "last"}, {"id": "29_4697_rev0", "kind": "feature", "layer": "29", "feature": "L29#4697", "label": "L29#4697", "a0_present": "1", "a0_act": "33.75", "a0_prob": "", "a0_direct": "0.947", "a0_pos": "509", "token": "\":", "a3_present": "1", "a3_act": "40.25", "a3_prob": "", "a3_direct": "1.112", "a3_pos": "503", "region": "last"}, {"id": "29_6209_rev0", "kind": "feature", "layer": "29", "feature": "L29#6209", "label": "L29#6209", "a0_present": "1", "a0_act": "67.5", "a0_prob": "", "a0_direct": "1.438", "a0_pos": "509", "token": "\":", "a3_present": "1", "a3_act": "67.0", "a3_prob": "", "a3_direct": "1.375", "a3_pos": "503", "region": "last"}, {"id": "29_78211_rev0", "kind": "feature", "layer": "29", "feature": "L29#78211", "label": "L29#78211", "a0_present": "1", "a0_act": "26.25", "a0_prob": "", "a0_direct": "-0.541", "a0_pos": "509", "token": "\":", "a3_present": "1", "a3_act": "44.5", "a3_prob": "", "a3_direct": "-0.883", "a3_pos": "503", "region": "last"}, {"id": "30_107948_rev0", "kind": "feature", "layer": "30", "feature": "L30#107948", "label": "L30#107948", "a0_present": "1", "a0_act": "31.875", "a0_prob": "", "a0_direct": "-1.004", "a0_pos": "509", "token": "\":", "a3_present": "1", "a3_act": "34.25", "a3_prob": "", "a3_direct": "-1.09", "a3_pos": "503", "region": "last"}, {"id": "30_133299_rev0", "kind": "feature", "layer": "30", "feature": "L30#133299", "label": "L30#133299", "a0_present": "1", "a0_act": "38.0", "a0_prob": "", "a0_direct": "0.077", "a0_pos": "509", "token": "\":", "a3_present": "1", "a3_act": "51.25", "a3_prob": "", "a3_direct": "0.089", "a3_pos": "503", "region": "last"}, {"id": "30_14723_rev0", "kind": "feature", "layer": "30", "feature": "L30#14723", "label": "L30#14723", "a0_present": "1", "a0_act": "66.5", "a0_prob": "", "a0_direct": "-1.458", "a0_pos": "509", "token": "\":", "a3_present": "1", "a3_act": "63.5", "a3_prob": "", "a3_direct": "-1.373", "a3_pos": "503", "region": "last"}, {"id": "30_21074_rev0", "kind": "feature", "layer": "30", "feature": "L30#21074", "label": "L30#21074", "a0_present": "1", "a0_act": "39.5", "a0_prob": "", "a0_direct": "0.926", "a0_pos": "509", "token": "\":", "a3_present": "1", "a3_act": "36.75", "a3_prob": "", "a3_direct": "0.83", "a3_pos": "503", "region": "last"}, {"id": "30_57609_rev0", "kind": "feature", "layer": "30", "feature": "L30#57609", "label": "L30#57609", "a0_present": "1", "a0_act": "53.25", "a0_prob": "", "a0_direct": "-1.176", "a0_pos": "509", "token": "\":", "a3_present": "1", "a3_act": "65.0", "a3_prob": "", "a3_direct": "-1.383", "a3_pos": "503", "region": "last"}, {"id": "31_123975_rev0", "kind": "feature", "layer": "31", "feature": "L31#123975", "label": "L31#123975", "a0_present": "1", "a0_act": "54.0", "a0_prob": "", "a0_direct": "2.319", "a0_pos": "509", "token": "\":", "a3_present": "1", "a3_act": "47.25", "a3_prob": "", "a3_direct": "2.01", "a3_pos": "503", "region": "last"}, {"id": "31_50662_rev0", "kind": "feature", "layer": "31", "feature": "L31#50662", "label": "L31#50662", "a0_present": "1", "a0_act": "61.5", "a0_prob": "", "a0_direct": "0.109", "a0_pos": "509", "token": "\":", "a3_present": "1", "a3_act": "66.0", "a3_prob": "", "a3_direct": "0.116", "a3_pos": "503", "region": "last"}, {"id": "32_124599_rev0", "kind": "feature", "layer": "32", "feature": "L32#124599", "label": "L32#124599", "a0_present": "1", "a0_act": "47.5", "a0_prob": "", "a0_direct": "0.166", "a0_pos": "509", "token": "\":", "a3_present": "1", "a3_act": "41.75", "a3_prob": "", "a3_direct": "0.15", "a3_pos": "503", "region": "last"}, {"id": "33_35155_rev0", "kind": "feature", "layer": "33", "feature": "L33#35155", "label": "L33#35155", "a0_present": "1", "a0_act": "167.0", "a0_prob": "", "a0_direct": "0.457", "a0_pos": "509", "token": "\":", "a3_present": "1", "a3_act": "171.0", "a3_prob": "", "a3_direct": "0.449", "a3_pos": "503", "region": "last"}, {"id": "33_37199_rev0", "kind": "feature", "layer": "33", "feature": "L33#37199", "label": "L33#37199", "a0_present": "1", "a0_act": "6.156", "a0_prob": "", "a0_direct": "0.021", "a0_pos": "509", "token": "\":", "a3_present": "1", "a3_act": "20.0", "a3_prob": "", "a3_direct": "0.066", "a3_pos": "503", "region": "last"}, {"id": "34_145627_rev0", "kind": "feature", "layer": "34", "feature": "L34#145627", "label": "L34#145627", "a0_present": "1", "a0_act": "290.0", "a0_prob": "", "a0_direct": "2.441", "a0_pos": "509", "token": "\":", "a3_present": "1", "a3_act": "318.0", "a3_prob": "", "a3_direct": "2.531", "a3_pos": "503", "region": "last"}, {"id": "34_76578_rev0", "kind": "feature", "layer": "34", "feature": "L34#76578", "label": "L34#76578", "a0_present": "1", "a0_act": "211.0", "a0_prob": "", "a0_direct": "-1.758", "a0_pos": "509", "token": "\":", "a3_present": "1", "a3_act": "221.0", "a3_prob": "", "a3_direct": "-1.754", "a3_pos": "503", "region": "last"}, {"id": "35_131022_rev0", "kind": "feature", "layer": "35", "feature": "L35#131022", "label": "L35#131022", "a0_present": "1", "a0_act": "65.0", "a0_prob": "", "a0_direct": "-0.865", "a0_pos": "509", "token": "\":", "a3_present": "1", "a3_act": "70.0", "a3_prob": "", "a3_direct": "-0.9", "a3_pos": "503", "region": "last"}]}, "circuit_edges": {"columns": ["source", "target", "a0", "a3", "change"], "rows": [{"source": "28_21276_rev0", "target": "29_4697_rev0", "a0": "35.75", "a3": "41.75", "change": "6.0"}, {"source": "29_6209_rev0", "target": "30_14723_rev0", "a0": "29.5", "a3": "29.25", "change": "-0.25"}, {"source": "28_21276_rev0", "target": "30_57609_rev0", "a0": "24.0", "a3": "28.0", "change": "4.0"}, {"source": "28_21276_rev0", "target": "29_78211_rev0", "a0": "19.5", "a3": "22.625", "change": "3.125"}, {"source": "30_133299_rev0", "target": "34_145627_rev0", "a0": "13.688", "a3": "18.5", "change": "4.812"}, {"source": "29_6209_rev0", "target": "30_57609_rev0", "a0": "16.5", "a3": "16.375", "change": "-0.125"}, {"source": "28_21276_rev0", "target": "30_133299_rev0", "a0": "14.125", "a3": "16.5", "change": "2.375"}, {"source": "24_81436_rev0", "target": "25_109686_rev0", "a0": "10.938", "a3": "11.625", "change": "0.688"}, {"source": "24_81436_rev0", "target": "29_6209_rev0", "a0": "11.0", "a3": "11.625", "change": "0.625"}, {"source": "24_81436_rev0", "target": "28_109390_rev0", "a0": "9.938", "a3": "10.688", "change": "0.75"}, {"source": "29_78211_rev0", "target": "30_133299_rev0", "a0": "6.188", "a3": "10.5", "change": "4.312"}, {"source": "30_133299_rev0", "target": "33_37199_rev0", "a0": "7.531", "a3": "10.125", "change": "2.594"}, {"source": "32_124599_rev0", "target": "34_145627_rev0", "a0": "9.188", "a3": "7.906", "change": "-1.281"}, {"source": "27_41770_rev0", "target": "28_21276_rev0", "a0": "-6.5", "a3": "-9.0", "change": "-2.5"}, {"source": "33_37199_rev0", "target": "34_145627_rev0", "a0": "2.719", "a3": "8.75", "change": "6.031"}, {"source": "25_128227_rev0", "target": "28_109390_rev0", "a0": "8.5", "a3": "8.188", "change": "-0.312"}, {"source": "25_151707_rev0", "target": "26_51615_rev0", "a0": "8.438", "a3": "7.781", "change": "-0.656"}, {"source": "31_50662_rev0", "target": "34_76578_rev0", "a0": "7.562", "a3": "8.062", "change": "0.5"}, {"source": "33_35155_rev0", "target": "34_76578_rev0", "a0": "7.406", "a3": "7.406", "change": "0.0"}, {"source": "29_4697_rev0", "target": "30_133299_rev0", "a0": "-6.094", "a3": "-7.281", "change": "-1.188"}, {"source": "32_124599_rev0", "target": "34_76578_rev0", "a0": "7.156", "a3": "6.156", "change": "-1.0"}, {"source": "24_81436_rev0", "target": "25_128227_rev0", "a0": "6.781", "a3": "7.094", "change": "0.312"}, {"source": "25_151707_rev0", "target": "29_4697_rev0", "a0": "6.844", "a3": "6.219", "change": "-0.625"}, {"source": "29_6209_rev0", "target": "call", "a0": "6.562", "a3": "6.344", "change": "-0.219"}, {"source": "29_4697_rev0", "target": "32_124599_rev0", "a0": "-5.219", "a3": "-6.219", "change": "-1.0"}, {"source": "32_124599_rev0", "target": "33_35155_rev0", "a0": "6.156", "a3": "5.344", "change": "-0.812"}, {"source": "26_51615_rev0", "target": "31_123975_rev0", "a0": "6.094", "a3": "5.781", "change": "-0.312"}, {"source": "25_109686_rev0", "target": "28_109390_rev0", "a0": "-5.656", "a3": "-5.906", "change": "-0.25"}, {"source": "24_81436_rev0", "target": "30_57609_rev0", "a0": "5.281", "a3": "5.625", "change": "0.344"}, {"source": "25_128227_rev0", "target": "29_6209_rev0", "a0": "5.469", "a3": "5.219", "change": "-0.25"}, {"source": "30_133299_rev0", "target": "31_50662_rev0", "a0": "4.031", "a3": "5.469", "change": "1.438"}, {"source": "29_6209_rev0", "target": "31_123975_rev0", "a0": "5.375", "a3": "5.344", "change": "-0.031"}, {"source": "24_81436_rev0", "target": "25_151707_rev0", "a0": "5.031", "a3": "5.25", "change": "0.219"}, {"source": "29_6209_rev0", "target": "33_35155_rev0", "a0": "5.188", "a3": "5.125", "change": "-0.062"}, {"source": "31_50662_rev0", "target": "34_145627_rev0", "a0": "4.844", "a3": "5.188", "change": "0.344"}, {"source": "30_14723_rev0", "target": "31_123975_rev0", "a0": "-5.125", "a3": "-4.906", "change": "0.219"}, {"source": "29_6209_rev0", "target": "nocall", "a0": "5.125", "a3": "4.969", "change": "-0.156"}, {"source": "28_109390_rev0", "target": "29_6209_rev0", "a0": "5.031", "a3": "3.391", "change": "-1.641"}, {"source": "31_123975_rev0", "target": "34_145627_rev0", "a0": "4.938", "a3": "4.406", "change": "-0.531"}, {"source": "29_4697_rev0", "target": "30_57609_rev0", "a0": "-4.094", "a3": "-4.875", "change": "-0.781"}, {"source": "28_109390_rev0", "target": "30_14723_rev0", "a0": "4.812", "a3": "3.25", "change": "-1.562"}, {"source": "33_37199_rev0", "target": "34_76578_rev0", "a0": "1.5", "a3": "4.812", "change": "3.312"}, {"source": "25_128227_rev0", "target": "30_14723_rev0", "a0": "4.75", "a3": "4.531", "change": "-0.219"}, {"source": "24_81436_rev0", "target": "30_14723_rev0", "a0": "4.438", "a3": "4.688", "change": "0.25"}, {"source": "29_6209_rev0", "target": "30_133299_rev0", "a0": "4.594", "a3": "4.625", "change": "0.031"}, {"source": "26_150551_rev0", "target": "27_41770_rev0", "a0": "3.891", "a3": "4.594", "change": "0.703"}, {"source": "25_151707_rev0", "target": "30_21074_rev0", "a0": "4.562", "a3": "4.125", "change": "-0.438"}, {"source": "28_21276_rev0", "target": "33_35155_rev0", "a0": "-3.812", "a3": "-4.469", "change": "-0.656"}, {"source": "29_78211_rev0", "target": "34_76578_rev0", "a0": "-2.422", "a3": "-4.156", "change": "-1.734"}, {"source": "34_145627_rev0", "target": "35_131022_rev0", "a0": "-3.688", "a3": "-4.156", "change": "-0.469"}, {"source": "25_109686_rev0", "target": "26_51615_rev0", "a0": "3.953", "a3": "4.125", "change": "0.172"}, {"source": "28_21276_rev0", "target": "nocall", "a0": "3.625", "a3": "4.094", "change": "0.469"}, {"source": "25_128227_rev0", "target": "34_76578_rev0", "a0": "-3.984", "a3": "-3.812", "change": "0.172"}, {"source": "28_21276_rev0", "target": "34_145627_rev0", "a0": "3.719", "a3": "3.969", "change": "0.25"}, {"source": "30_57609_rev0", "target": "31_50662_rev0", "a0": "-3.188", "a3": "-3.891", "change": "-0.703"}, {"source": "30_57609_rev0", "target": "31_123975_rev0", "a0": "-3.125", "a3": "-3.844", "change": "-0.719"}, {"source": "25_151707_rev0", "target": "28_21276_rev0", "a0": "3.781", "a3": "3.484", "change": "-0.297"}, {"source": "31_123975_rev0", "target": "33_37199_rev0", "a0": "3.734", "a3": "3.25", "change": "-0.484"}, {"source": "26_150551_rev0", "target": "28_21276_rev0", "a0": "3.156", "a3": "3.719", "change": "0.562"}, {"source": "29_4697_rev0", "target": "34_145627_rev0", "a0": "2.984", "a3": "3.656", "change": "0.672"}, {"source": "29_4697_rev0", "target": "31_50662_rev0", "a0": "3.031", "a3": "3.625", "change": "0.594"}, {"source": "25_109686_rev0", "target": "30_57609_rev0", "a0": "3.484", "a3": "3.594", "change": "0.109"}, {"source": "33_35155_rev0", "target": "35_131022_rev0", "a0": "-3.578", "a3": "-3.562", "change": "0.016"}, {"source": "30_14723_rev0", "target": "33_37199_rev0", "a0": "-3.469", "a3": "-3.25", "change": "0.219"}, {"source": "29_78211_rev0", "target": "31_50662_rev0", "a0": "1.969", "a3": "3.375", "change": "1.406"}, {"source": "28_21276_rev0", "target": "31_50662_rev0", "a0": "-2.891", "a3": "-3.328", "change": "-0.438"}, {"source": "34_145627_rev0", "target": "call", "a0": "3.141", "a3": "3.25", "change": "0.109"}, {"source": "30_107948_rev0", "target": "32_124599_rev0", "a0": "2.891", "a3": "3.234", "change": "0.344"}, {"source": "29_6209_rev0", "target": "30_107948_rev0", "a0": "3.172", "a3": "3.172", "change": "0.0"}, {"source": "25_109686_rev0", "target": "29_4697_rev0", "a0": "2.969", "a3": "3.047", "change": "0.078"}, {"source": "29_6209_rev0", "target": "30_21074_rev0", "a0": "3.0", "a3": "2.969", "change": "-0.031"}, {"source": "29_4697_rev0", "target": "33_37199_rev0", "a0": "2.438", "a3": "2.906", "change": "0.469"}, {"source": "28_109390_rev0", "target": "30_21074_rev0", "a0": "2.859", "a3": "1.93", "change": "-0.93"}, {"source": "30_107948_rev0", "target": "31_123975_rev0", "a0": "-2.609", "a3": "-2.828", "change": "-0.219"}, {"source": "25_151707_rev0", "target": "30_14723_rev0", "a0": "2.812", "a3": "2.562", "change": "-0.25"}, {"source": "25_151707_rev0", "target": "31_123975_rev0", "a0": "2.812", "a3": "2.594", "change": "-0.219"}, {"source": "30_133299_rev0", "target": "35_131022_rev0", "a0": "2.031", "a3": "2.781", "change": "0.75"}, {"source": "28_21276_rev0", "target": "31_123975_rev0", "a0": "-2.391", "a3": "-2.766", "change": "-0.375"}, {"source": "30_133299_rev0", "target": "33_35155_rev0", "a0": "2.062", "a3": "2.766", "change": "0.703"}, {"source": "23_151692_abs159", "target": "28_21276_rev0", "a0": "2.406", "a3": "2.734", "change": "0.328"}, {"source": "30_57609_rev0", "target": "33_35155_rev0", "a0": "-2.281", "a3": "-2.734", "change": "-0.453"}, {"source": "25_151707_rev0", "target": "35_131022_rev0", "a0": "2.734", "a3": "2.453", "change": "-0.281"}, {"source": "24_81436_rev0", "target": "34_76578_rev0", "a0": "2.594", "a3": "2.719", "change": "0.125"}, {"source": "31_123975_rev0", "target": "34_76578_rev0", "a0": "2.688", "a3": "2.328", "change": "-0.359"}, {"source": "26_51615_rev0", "target": "34_145627_rev0", "a0": "2.688", "a3": "2.453", "change": "-0.234"}, {"source": "29_6209_rev0", "target": "31_50662_rev0", "a0": "2.641", "a3": "2.625", "change": "-0.016"}, {"source": "29_78211_rev0", "target": "31_123975_rev0", "a0": "1.523", "a3": "2.594", "change": "1.07"}, {"source": "25_109686_rev0", "target": "30_14723_rev0", "a0": "2.484", "a3": "2.562", "change": "0.078"}, {"source": "24_81436_rev0", "target": "26_51615_rev0", "a0": "2.359", "a3": "2.547", "change": "0.188"}, {"source": "29_78211_rev0", "target": "35_131022_rev0", "a0": "1.445", "a3": "2.547", "change": "1.102"}, {"source": "24_81436_rev0", "target": "29_78211_rev0", "a0": "2.344", "a3": "2.531", "change": "0.188"}, {"source": "31_123975_rev0", "target": "call", "a0": "2.531", "a3": "2.203", "change": "-0.328"}, {"source": "24_81436_rev0", "target": "28_21276_rev0", "a0": "2.375", "a3": "2.516", "change": "0.141"}, {"source": "25_128227_rev0", "target": "34_145627_rev0", "a0": "-2.5", "a3": "-2.359", "change": "0.141"}, {"source": "25_109686_rev0", "target": "26_150551_rev0", "a0": "-2.359", "a3": "-2.484", "change": "-0.125"}, {"source": "24_81436_rev0", "target": "33_35155_rev0", "a0": "2.375", "a3": "2.484", "change": "0.109"}, {"source": "29_6209_rev0", "target": "34_76578_rev0", "a0": "2.484", "a3": "2.453", "change": "-0.031"}, {"source": "28_21276_rev0", "target": "29_6209_rev0", "a0": "2.078", "a3": "2.422", "change": "0.344"}, {"source": "24_81436_rev0", "target": "30_21074_rev0", "a0": "2.312", "a3": "2.422", "change": "0.109"}, {"source": "25_109686_rev0", "target": "30_133299_rev0", "a0": "2.359", "a3": "2.422", "change": "0.062"}, {"source": "30_133299_rev0", "target": "31_123975_rev0", "a0": "-1.75", "a3": "-2.375", "change": "-0.625"}, {"source": "26_51615_rev0", "target": "27_41770_rev0", "a0": "-2.359", "a3": "-2.25", "change": "0.109"}, {"source": "31_123975_rev0", "target": "33_35155_rev0", "a0": "2.281", "a3": "2.0", "change": "-0.281"}, {"source": "24_81436_rev0", "target": "33_37199_rev0", "a0": "2.094", "a3": "2.25", "change": "0.156"}, {"source": "29_78211_rev0", "target": "34_145627_rev0", "a0": "-1.289", "a3": "-2.25", "change": "-0.961"}, {"source": "25_109686_rev0", "target": "31_123975_rev0", "a0": "-2.156", "a3": "-2.219", "change": "-0.062"}, {"source": "30_57609_rev0", "target": "34_76578_rev0", "a0": "-1.766", "a3": "-2.188", "change": "-0.422"}, {"source": "29_6209_rev0", "target": "34_145627_rev0", "a0": "2.172", "a3": "2.016", "change": "-0.156"}, {"source": "30_133299_rev0", "target": "32_124599_rev0", "a0": "1.602", "a3": "2.156", "change": "0.555"}, {"source": "25_109686_rev0", "target": "34_76578_rev0", "a0": "-2.156", "a3": "-2.156", "change": "0.0"}, {"source": "25_109686_rev0", "target": "33_35155_rev0", "a0": "2.094", "a3": "2.109", "change": "0.016"}, {"source": "33_35155_rev0", "target": "34_145627_rev0", "a0": "-2.109", "a3": "-2.062", "change": "0.047"}, {"source": "28_21276_rev0", "target": "32_124599_rev0", "a0": "1.836", "a3": "2.094", "change": "0.258"}, {"source": "25_128227_rev0", "target": "27_41770_rev0", "a0": "-2.078", "a3": "-2.0", "change": "0.078"}, {"source": "30_57609_rev0", "target": "32_124599_rev0", "a0": "1.656", "a3": "2.078", "change": "0.422"}, {"source": "25_151707_rev0", "target": "30_107948_rev0", "a0": "2.062", "a3": "1.898", "change": "-0.164"}, {"source": "30_107948_rev0", "target": "33_37199_rev0", "a0": "1.805", "a3": "1.984", "change": "0.18"}, {"source": "24_81436_rev0", "target": "34_145627_rev0", "a0": "1.891", "a3": "1.977", "change": "0.086"}, {"source": "27_41770_rev0", "target": "29_4697_rev0", "a0": "-1.43", "a3": "-1.961", "change": "-0.531"}, {"source": "25_151707_rev0", "target": "27_41770_rev0", "a0": "1.953", "a3": "1.82", "change": "-0.133"}, {"source": "30_21074_rev0", "target": "33_35155_rev0", "a0": "-1.945", "a3": "-1.836", "change": "0.109"}, {"source": "29_4697_rev0", "target": "30_107948_rev0", "a0": "1.617", "a3": "1.93", "change": "0.312"}, {"source": "31_50662_rev0", "target": "33_35155_rev0", "a0": "-1.797", "a3": "-1.922", "change": "-0.125"}, {"source": "30_14723_rev0", "target": "34_145627_rev0", "a0": "1.891", "a3": "1.922", "change": "0.031"}, {"source": "29_4697_rev0", "target": "34_76578_rev0", "a0": "1.555", "a3": "1.883", "change": "0.328"}, {"source": "24_81436_rev0", "target": "31_123975_rev0", "a0": "1.719", "a3": "1.867", "change": "0.148"}, {"source": "30_21074_rev0", "target": "34_76578_rev0", "a0": "-1.867", "a3": "-1.617", "change": "0.25"}, {"source": "28_21276_rev0", "target": "33_37199_rev0", "a0": "1.594", "a3": "1.828", "change": "0.234"}, {"source": "25_128227_rev0", "target": "26_51615_rev0", "a0": "1.789", "a3": "1.734", "change": "-0.055"}, {"source": "29_78211_rev0", "target": "30_107948_rev0", "a0": "-1.055", "a3": "-1.781", "change": "-0.727"}, {"source": "28_21276_rev0", "target": "34_76578_rev0", "a0": "-1.383", "a3": "-1.766", "change": "-0.383"}, {"source": "28_75585_rev0", "target": "32_124599_rev0", "a0": "1.352", "a3": "1.75", "change": "0.398"}, {"source": "29_78211_rev0", "target": "30_14723_rev0", "a0": "-1.031", "a3": "-1.734", "change": "-0.703"}, {"source": "26_51615_rev0", "target": "30_133299_rev0", "a0": "1.727", "a3": "1.641", "change": "-0.086"}, {"source": "32_124599_rev0", "target": "35_131022_rev0", "a0": "1.711", "a3": "1.453", "change": "-0.258"}, {"source": "25_151707_rev0", "target": "31_50662_rev0", "a0": "1.656", "a3": "1.539", "change": "-0.117"}, {"source": "25_151707_rev0", "target": "34_145627_rev0", "a0": "-1.656", "a3": "-1.508", "change": "0.148"}, {"source": "30_14723_rev0", "target": "35_131022_rev0", "a0": "-1.633", "a3": "-1.609", "change": "0.023"}, {"source": "32_124599_rev0", "target": "33_37199_rev0", "a0": "1.609", "a3": "1.406", "change": "-0.203"}, {"source": "29_4697_rev0", "target": "30_14723_rev0", "a0": "-1.336", "a3": "-1.586", "change": "-0.25"}]}, "__en_values": {"最後 token": "final position", "assistant 開頭": "assistant prefix", "記憶段落": "memory span", "Turn 2 其他": "turn-2 other", "harness 說明": "harness instructions", "A0 原始命令句": "A0 imperative", "A3 描述語氣": "A3 descriptive", "MLP 誤差": "MLP error", "不呼叫": "no call", "呼叫": "call", "[ 呼叫": "[ call", "[] 不呼叫": "[] no call", "A0 總和（圖內）": "A0 total (graph)", "共有 feature 的變化": "Shared features: Δ", "僅 A3 啟動的 feature": "A3-only features", "僅 A0 啟動的 feature（移除）": "A0-only features (removed)", "MLP 誤差節點的變化": "MLP error nodes: Δ", "embedding 的變化": "Embeddings: Δ", "A3 總和（圖內）": "A3 total (graph)"}}</script>
+<script>
+  // Stand-in for the dashboard runtime, plus the language switch.
+  window.dash = (() => {
+    const DATA = JSON.parse(document.getElementById('page-data').textContent);
+    const EN = DATA.__en_values;
+    const draws = new Map(), watchers = [];
+    const tr = (v) => (EN[v] !== undefined ? EN[v] : v.startsWith('誤差 ') ? 'error ' + v.slice(3) : v);
+    const rows = (id) => (window.LANG === 'zh' ? DATA[id].rows : DATA[id].rows.map((r) => Object.fromEntries(Object.entries(r).map(([k, v]) => [k, tr(v)]))));
+    const run = (name) => document.querySelectorAll(`[data-draw="${name}"]`).forEach((el) => {
+      try { draws.get(name)(el); } catch (e) { console.error(name, e); }
+    });
+    const all = () => { watchers.forEach((fn) => fn()); draws.forEach((_, n) => run(n)); };
+    let t;
+    window.addEventListener('resize', () => { clearTimeout(t); t = setTimeout(all, 150); });
+    return {
+      colors: ['var(--s0)', 'var(--s1)', 'var(--s2)', 'var(--s3)', 'var(--s4)', 'var(--s5)', 'var(--fg-muted)', 'var(--ref)'],
+      data: (id) => (DATA[id] ? {status: 'ok', data: rows(id), columns: DATA[id].columns} : {status: 'missing', data: []}),
+      onData: (fn) => { watchers.push(fn); },
+      draw: (name, fn) => { if (fn) draws.set(name, fn); else if (draws.has(name)) run(name); },
+      _all: all,
+    };
+  })();
+  window.LANG = 'en';
+  window.L = (en, zh) => (window.LANG === 'zh' ? zh : en);
+</script>
+</head>
+<body>
+<main class="page">
+  <div class="lang-bar"><button type="button" class="lang-btn" id="lang-toggle"><span class="lang-cur">English</span><span class="lang-alt">→ 中文</span></button></div>
+  <div id="content"></div>
+  <template id="tpl-en">
+<div class="ct">
+  <header class="ct-head">
+    <h1 class="ct-title" id="top">Memory phrasing and tool-call decisions in Qwen3-8B: an attribution-graph comparison</h1>
+    <p class="ct-lede">F5→F2→F3 memory-poisoning case <code>promptintel-006.m05</code>, turn 2. Two prompts differ only in how the retained memory is phrased: <b>A0</b> keeps the injected directive as an imperative, <b>A3</b> rewrites it descriptively. We attribute the decision token after <code>"tool_calls":</code>, contrasting the logits of <code>[</code> (call) and <code>[]</code> (no call), and compare the two attribution graphs. Main result: both graphs share the same dominant decision features; the A0→A3 flip is a distributed shift across many features at the decision position rather than a single gating feature, and the memory span contributes little direct attribution.</p>
+    <dl class="ct-setup">
+      <div><dt>Model</dt><dd>Qwen/Qwen3-8B (bf16), Ollama chat template, <code>/no_think</code>, no system prompt (<code>none</code> mode)</dd></div>
+      <div><dt>Replacement model</dt><dd><code>mwhanna/qwen3-8b-transcoders</code> (per-layer transcoders), circuit-tracer, TransformerLens backend, lazy encoder/decoder</dd></div>
+      <div><dt>Attribution</dt><dd>targets: logit(<code>[</code>) and logit(<code>[]</code>) at the decision position (tokens: space + <code>[</code> + newline, id 2278; space + <code>[]</code> + newline, id 4167); <code>max_feature_nodes</code> 8192, <code>batch_size</code> 16; pruned graphs exported with node threshold 0.8, edge threshold 0.98</dd></div>
+      <div><dt>Metric</dt><dd>direct attribution = Σ edge weights into logit(call) − Σ into logit(no call); features matched across conditions by (layer, index, position from end), or absolute position inside the shared prefix</dd></div>
+    </dl>
+  </header>
+
+  <div class="ct-tiles">
+    <div class="ct-tile">
+      <span class="ct-tile-label"><i class="ct-sw" data-sw="0"></i>A0 (imperative) · p(call), bf16</span>
+      <span class="ct-tile-num"><span data-draw="pcall" data-source="behavior" data-field="p_call" data-where="set=A0">—</span></span>
+      <span class="ct-tile-sub">log p(call)/p(no call) <span data-draw="ldiff" data-source="behavior" data-field="logit_diff" data-where="set=A0">—</span> ｜ Σ direct attribution (pruned graph) <span data-draw="gsum" data-source="behavior" data-field="graph_direct_sum" data-where="set=A0">—</span></span>
+    </div>
+    <div class="ct-tile">
+      <span class="ct-tile-label"><i class="ct-sw" data-sw="1"></i>A3 (descriptive) · p(call), bf16</span>
+      <span class="ct-tile-num"><span data-draw="pcall" data-source="behavior" data-field="p_call" data-where="set=A3">—</span></span>
+      <span class="ct-tile-sub">log p(call)/p(no call) <span data-draw="ldiff" data-source="behavior" data-field="logit_diff" data-where="set=A3">—</span> ｜ Σ direct attribution (pruned graph) <span data-draw="gsum" data-source="behavior" data-field="graph_direct_sum" data-where="set=A3">—</span></span>
+    </div>
+  </div>
+
+  <section class="ct-card" id="circuit">
+    <h2>Attribution graph: decision circuit at the final position</h2>
+    <p class="ct-note">Subgraph of the 14 final-position features with the largest |direct attribution|, the top feature inputs of the six strongest, the harness <code>[]</code> feature, and the two target logits. Rows are layers; node size is activation, node color is the sign of direct attribution; edge width is relative to the strongest input of its target, dashed edges are inhibitory. Hover a node to isolate its edges.</p>
+    <div class="ct-controls">
+      <div class="ct-seg" role="group" aria-label="Condition">
+        <button type="button" class="ct-seg-btn" data-view="A0" aria-pressed="true">A0</button>
+        <button type="button" class="ct-seg-btn" data-view="A3" aria-pressed="false">A3</button>
+        <button type="button" class="ct-seg-btn" data-view="diff" aria-pressed="false">Δ (A3 − A0)</button>
+      </div>
+      <div class="ct-legend">
+        <span><i class="ct-sw dot" data-sw="2"></i>toward call</span>
+        <span><i class="ct-sw dot" data-sw="3"></i>toward no call</span>
+        <span><i class="ct-line"></i>excitatory</span>
+        <span><i class="ct-line dash"></i>inhibitory</span>
+      </div>
+    </div>
+    <div class="ct-chart" style="min-height: 40rem" data-draw="circuit" data-source="circuit_nodes circuit_edges"></div>
+  </section>
+
+  <div class="ct-grid">
+    <section class="ct-card" id="waterfall">
+      <h2>Decomposition of the A0→A3 change in direct logit attribution</h2>
+      <p class="ct-note">Σ of direct edges into logit(call) − logit(no call). Features are matched across graphs by (layer, index, position from end). Most of the change comes from transcoder features, split roughly evenly between shifts in shared features and features active only in A3; the change in MLP error nodes is small.</p>
+      <div class="ct-chart" data-draw="waterfall" data-source="gap_waterfall"></div>
+    </section>
+
+    <section class="ct-card" id="edges">
+      <h2>Cross-position inputs to the decision position</h2>
+      <p class="ct-note">Share of |edge weight| from earlier positions into nodes at the decision token, by prompt span. The memory span carries a small share. Because attribution is computed with frozen attention patterns, an effect of memory phrasing routed through QK (where the decision position attends) would appear only as changed downstream feature activations, not as edges from the memory span.</p>
+      <div class="ct-legend">
+        <span><i class="ct-sw" data-sw="2"></i>assistant prefix</span>
+        <span><i class="ct-sw" data-sw="3"></i>harness instructions</span>
+        <span><i class="ct-sw" data-sw="4"></i>turn-2 other</span>
+        <span><i class="ct-sw" data-sw="5"></i>memory span</span>
+      </div>
+      <div class="ct-chart" style="min-height: 7rem" data-draw="edges" data-source="edge_share"></div>
+    </section>
+  </div>
+
+  <section class="ct-card" id="features">
+    <h2>Top decision features at the final position</h2>
+    <p class="ct-note">Direct attribution to logit(call) − logit(no call) for the 20 shared final-position features with the largest |effect|. Most features keep similar effects across conditions; no dominant feature switches off in A3. L28#21276 is the strongest no-call feature and strengthens further in A3.</p>
+    <div class="ct-legend">
+      <span><i class="ct-sw dot" data-sw="0"></i>A0 imperative</span>
+      <span><i class="ct-sw dot" data-sw="1"></i>A3 descriptive</span>
+    </div>
+    <div class="ct-chart" style="min-height: 30rem" data-draw="dumbbell" data-source="top_features"></div>
+  </section>
+
+  <section class="ct-card" id="regions">
+    <h2>Direct attribution by prompt span and node type</h2>
+    <p class="ct-note">Shared x-scale. The largest change is in transcoder features at the final position. Final-position MLP error nodes push toward call in both conditions, so the A0 call decision is only partly explained by the replacement model.</p>
+    <div class="ct-legend">
+      <span><i class="ct-sw" data-sw="0"></i>A0 imperative</span>
+      <span><i class="ct-sw" data-sw="1"></i>A3 descriptive</span>
+    </div>
+    <div class="ct-grid">
+      <div>
+        <p class="ct-sub">transcoder features</p>
+        <div class="ct-chart" style="min-height: 15rem" data-draw="regions" data-kind="transcoder feature" data-source="region_effect"></div>
+      </div>
+      <div>
+        <p class="ct-sub">MLP error nodes</p>
+        <div class="ct-chart" style="min-height: 15rem" data-draw="regions" data-kind="MLP error" data-source="region_effect"></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="ct-up" id="upstream">
+    <h2 class="ct-section">Upstream of the two dominant decision features</h2>
+    <p class="ct-lede">Incoming edges from the full, unpruned adjacency matrices (8,192 selected features + error + embedding nodes). Both the strongest no-call feature (L28#21276) and the strongest call feature (L34#145627) are more active in A3; the no-call side gains more direct attribution. Their inputs come overwhelmingly from lower-layer features at the same (final) position; the memory span provides almost no direct input to either.</p>
+    <section class="ct-card" id="up-both">
+      <h2>Activation and direct attribution of the two features</h2>
+      <p class="ct-note">Left: activation at the final position. Right: direct attribution to logit(call) − logit(no call). Both features increase in activation from A0 to A3, but the increase in no-call attribution outweighs the increase in call attribution.</p>
+      <div class="ct-legend">
+        <span><i class="ct-sw" data-sw="0"></i>A0 imperative</span>
+        <span><i class="ct-sw" data-sw="1"></i>A3 descriptive</span>
+      </div>
+      <div class="ct-grid">
+        <div>
+          <p class="ct-sub">activation</p>
+          <div class="ct-chart" style="min-height: 9rem" data-draw="upboth" data-metric="activation" data-source="upstream_target"></div>
+        </div>
+        <div>
+          <p class="ct-sub">direct attribution</p>
+          <div class="ct-chart" style="min-height: 9rem" data-draw="upboth" data-metric="direct" data-source="upstream_target"></div>
+        </div>
+      </div>
+    </section>
+
+    <h3 class="ct-subsection">L28#21276 (no-call)</h3>
+    <div class="ct-grid">
+      <section class="ct-card" id="up-regions">
+        <h2>Input by source span</h2>
+        <p class="ct-note">Σ incoming edge weight by source span (features, error nodes and embeddings combined; hover for the split). Most of the A3 increase comes from the final position. The memory span contributes a small negative input in A0, carried by error nodes, and roughly zero in A3.</p>
+        <div class="ct-legend">
+          <span><i class="ct-sw" data-sw="0"></i>A0 imperative</span>
+          <span><i class="ct-sw" data-sw="1"></i>A3 descriptive</span>
+        </div>
+        <div class="ct-chart" style="min-height: 15rem" data-draw="upregions" data-target="L28_21276" data-source="upstream_region"></div>
+      </section>
+      <section class="ct-card" id="up-sources">
+        <h2>Upstream sources with the largest change</h2>
+        <p class="ct-note">Sources ranked by |Δ edge weight|. L27#41770 is the main inhibitory input and becomes more inhibitory in A3, but excitatory inputs grow more. The last row is L23#151692 at the <code>[]</code> token of the empty-list example in the harness instructions; the identical prefix means its activation is unchanged, so the edge change reflects re-weighted attention from the decision position.</p>
+        <div class="ct-legend">
+          <span><i class="ct-sw dot" data-sw="0"></i>A0 imperative</span>
+          <span><i class="ct-sw dot" data-sw="1"></i>A3 descriptive</span>
+        </div>
+        <div class="ct-chart" style="min-height: 26rem" data-draw="upsources" data-target="L28_21276" data-source="upstream_sources"></div>
+      </section>
+    </div>
+
+    <h3 class="ct-subsection">L34#145627 (call)</h3>
+    <div class="ct-grid">
+      <section class="ct-card" id="up34-regions">
+        <h2>Input by source span</h2>
+        <p class="ct-note">Inputs come almost entirely from the final position; harness-span input decreases in A3 and the memory span is near zero. Graph nodes account for only about half of this feature\'s activation; the remainder comes from features outside the selected 8,192 and from biases.</p>
+        <div class="ct-legend">
+          <span><i class="ct-sw" data-sw="0"></i>A0 imperative</span>
+          <span><i class="ct-sw" data-sw="1"></i>A3 descriptive</span>
+        </div>
+        <div class="ct-chart" style="min-height: 15rem" data-draw="upregions" data-target="L34_145627" data-source="upstream_region"></div>
+      </section>
+      <section class="ct-card" id="up34-sources">
+        <h2>Upstream sources with the largest change</h2>
+        <p class="ct-note">Sources ranked by |Δ edge weight|. Several layer-30–33 features (L33#37199, L30#133299, L31#148283, L32#5477) become substantially more active in A3 and drive the call feature up as well.</p>
+        <div class="ct-legend">
+          <span><i class="ct-sw dot" data-sw="0"></i>A0 imperative</span>
+          <span><i class="ct-sw dot" data-sw="1"></i>A3 descriptive</span>
+        </div>
+        <div class="ct-chart" style="min-height: 26rem" data-draw="upsources" data-target="L34_145627" data-source="upstream_sources"></div>
+      </section>
+    </div>
+  </section>
+
+  <section class="ct-card" id="limits">
+    <h2>Caveats and next steps</h2>
+    <ul class="ct-list">
+      <li><b>Single case.</b> One mutation (<code>promptintel-006.m05</code>), one prompt mode; the shared decision features should be checked across further A0/A3 pairs before calling them general tool-call features.</li>
+      <li><b>Linear attribution, frozen attention.</b> Edges are first-order attributions under frozen attention and normalisation, not causal effects. Effects routed through attention patterns are not represented as edges.</li>
+      <li><b>Reconstruction error.</b> Final-position MLP error nodes are large and push toward call in both conditions, so part of the A0 behaviour is outside the replacement model.</li>
+      <li><b>Coverage.</b> Graphs keep 8,192 of roughly 650k active features; some dominant features (e.g. L34#145627) have only about half of their activation explained by graph nodes.</li>
+      <li><b>Model mismatch.</b> Behavioural probabilities are from bf16 greedy decoding; graph logit probabilities come from the replacement model and differ slightly.</li>
+      <li><b>Pending.</b> Feature interventions (ablate/steer L28#21276, L34#145627, swap final-position feature states) and activation patching (attention vs MLP outputs, layer-wise residual sweep) are prepared in the Colab notebook to test the attention-routing hypothesis causally.</li>
+    </ul>
+  </section>
+
+  <section class="ct-card" id="table">
+    <h2>Decision features: values</h2>
+    <p class="ct-note">Direct attribution to logit(call) − logit(no call) and activation at the final position. Δ is A3 − A0 (green: toward call, red: toward no call).</p>
+    <div class="ct-table-box">
+      <table class="ct-table" data-source="top_features" data-row-key="feature">
+        <thead><tr>
+          <th data-field="feature">Feature</th>
+          <th data-field="a0_direct">A0 direct</th>
+          <th data-field="a3_direct">A3 direct</th>
+          <th data-field="change">Δ</th>
+          <th data-field="a0_act">A0 act.</th>
+          <th data-field="a3_act">A3 act.</th>
+        </tr></thead>
+        <tbody data-draw="table"></tbody>
+      </table>
+    </div>
+  </section>
+</div>
+<p class="page-foot">Source: circuit-tracer attribution graphs for Qwen3-8B (mwhanna/qwen3-8b-transcoders), case promptintel-006.m05. All values are embedded in this page; it loads no external data.</p>
+</template>
+  <template id="tpl-zh">
+<div class="ct">
+  <header class="ct-head">
+    <h1 class="ct-title" id="top">Qwen3-8B 中記憶措辭對工具呼叫決策的影響：歸因圖比較分析</h1>
+    <p class="ct-lede">F5→F2→F3 記憶污染案例 <code>promptintel-006.m05</code>，第 2 輪。兩組 prompt 僅在保留記憶的措辭上不同：<b>A0</b> 保留注入指令的命令句形式，<b>A3</b> 改寫為描述語氣。我們對 <code>"tool_calls":</code> 之後的決策 token 進行歸因，比較 <code>[</code>（呼叫）與 <code>[]</code>（不呼叫）兩個 logit，並對照兩張歸因圖。主要結果：兩張圖共享相同的主要決策 feature；A0→A3 的決策翻轉來自決策位置上大量 feature 的分散性偏移，而非單一閘控 feature；記憶段落本身提供的直接歸因很少。</p>
+    <dl class="ct-setup">
+      <div><dt>模型</dt><dd>Qwen/Qwen3-8B（bf16），Ollama chat template，<code>/no_think</code>，不含 system prompt（<code>none</code> 模式）</dd></div>
+      <div><dt>替代模型</dt><dd><code>mwhanna/qwen3-8b-transcoders</code>（逐層 transcoder），circuit-tracer，TransformerLens 後端，lazy encoder/decoder</dd></div>
+      <div><dt>歸因設定</dt><dd>目標為決策位置上的 logit(<code>[</code>) 與 logit(<code>[]</code>)，實際 token 分別是「空格 + <code>[</code> + 換行」（id 2278）與「空格 + <code>[]</code> + 換行」（id 4167）；<code>max_feature_nodes</code> 8192，<code>batch_size</code> 16；剪枝圖以 node threshold 0.8、edge threshold 0.98 匯出</dd></div>
+      <div><dt>指標</dt><dd>直接歸因 = 連入 logit(呼叫) 的邊權重總和 − 連入 logit(不呼叫) 的邊權重總和；跨條件的 feature 以（層、編號、距結尾位置）對齊，共同前綴內則以絕對位置對齊</dd></div>
+    </dl>
+  </header>
+
+  <div class="ct-tiles">
+    <div class="ct-tile">
+      <span class="ct-tile-label"><i class="ct-sw" data-sw="0"></i>A0（命令句）· p(呼叫)，bf16</span>
+      <span class="ct-tile-num"><span data-draw="pcall" data-source="behavior" data-field="p_call" data-where="set=A0">—</span></span>
+      <span class="ct-tile-sub">log p(呼叫)/p(不呼叫) <span data-draw="ldiff" data-source="behavior" data-field="logit_diff" data-where="set=A0">—</span> ｜ 直接歸因總和（剪枝圖） <span data-draw="gsum" data-source="behavior" data-field="graph_direct_sum" data-where="set=A0">—</span></span>
+    </div>
+    <div class="ct-tile">
+      <span class="ct-tile-label"><i class="ct-sw" data-sw="1"></i>A3（描述語氣）· p(呼叫)，bf16</span>
+      <span class="ct-tile-num"><span data-draw="pcall" data-source="behavior" data-field="p_call" data-where="set=A3">—</span></span>
+      <span class="ct-tile-sub">log p(呼叫)/p(不呼叫) <span data-draw="ldiff" data-source="behavior" data-field="logit_diff" data-where="set=A3">—</span> ｜ 直接歸因總和（剪枝圖） <span data-draw="gsum" data-source="behavior" data-field="graph_direct_sum" data-where="set=A3">—</span></span>
+    </div>
+  </div>
+
+  <section class="ct-card" id="circuit">
+    <h2>歸因圖：決策位置上的決策迴路</h2>
+    <p class="ct-note">子圖包含：決策位置上 |直接歸因| 最大的 14 個 feature、其中最強 6 個各自的主要 feature 輸入、harness 範例 <code>[]</code> 上的 feature，以及兩個目標 logit。每一列為一層；節點大小代表啟動值，顏色代表直接歸因的正負方向；邊的粗細以其目標節點最強輸入為基準，虛線為抑制性連結。將游標移到節點上可單獨顯示其連結。</p>
+    <div class="ct-controls">
+      <div class="ct-seg" role="group" aria-label="條件">
+        <button type="button" class="ct-seg-btn" data-view="A0" aria-pressed="true">A0</button>
+        <button type="button" class="ct-seg-btn" data-view="A3" aria-pressed="false">A3</button>
+        <button type="button" class="ct-seg-btn" data-view="diff" aria-pressed="false">差異 Δ（A3 − A0）</button>
+      </div>
+      <div class="ct-legend">
+        <span><i class="ct-sw dot" data-sw="2"></i>偏向呼叫</span>
+        <span><i class="ct-sw dot" data-sw="3"></i>偏向不呼叫</span>
+        <span><i class="ct-line"></i>激發性</span>
+        <span><i class="ct-line dash"></i>抑制性</span>
+      </div>
+    </div>
+    <div class="ct-chart" style="min-height: 40rem" data-draw="circuit" data-source="circuit_nodes circuit_edges"></div>
+  </section>
+
+  <div class="ct-grid">
+    <section class="ct-card" id="waterfall">
+      <h2>A0→A3 直接 logit 歸因變化的分解</h2>
+      <p class="ct-note">連入 logit(呼叫) − logit(不呼叫) 的直接邊總和。跨圖的 feature 以（層、編號、距結尾位置）對齊。變化主要來自 transcoder feature，約略平均分為共有 feature 的偏移與僅在 A3 啟動的 feature；MLP 誤差節點的變化很小。</p>
+      <div class="ct-chart" data-draw="waterfall" data-source="gap_waterfall"></div>
+    </section>
+
+    <section class="ct-card" id="edges">
+      <h2>決策位置的跨位置輸入</h2>
+      <p class="ct-note">從前面位置連入決策 token 節點的 |邊權重| 佔比，依 prompt 段落區分。記憶段落只佔一小部分。由於歸因是在凍結 attention pattern 的條件下計算，若記憶措辭的影響是經由 QK（決策位置注意哪些內容）傳遞，在圖中只會表現為下游 feature 啟動值的改變，而不會呈現為來自記憶段落的邊。</p>
+      <div class="ct-legend">
+        <span><i class="ct-sw" data-sw="2"></i>assistant 開頭</span>
+        <span><i class="ct-sw" data-sw="3"></i>harness 說明</span>
+        <span><i class="ct-sw" data-sw="4"></i>第 2 輪其他內容</span>
+        <span><i class="ct-sw" data-sw="5"></i>記憶段落</span>
+      </div>
+      <div class="ct-chart" style="min-height: 7rem" data-draw="edges" data-source="edge_share"></div>
+    </section>
+  </div>
+
+  <section class="ct-card" id="features">
+    <h2>決策位置上的主要決策 feature</h2>
+    <p class="ct-note">兩組共有、位於決策位置、|直接歸因| 最大的 20 個 feature 對 logit(呼叫) − logit(不呼叫) 的直接歸因。多數 feature 在兩個條件下效果相近，沒有任何主要 feature 在 A3 中被關閉。L28#21276 是最強的不呼叫 feature，在 A3 中進一步增強。</p>
+    <div class="ct-legend">
+      <span><i class="ct-sw dot" data-sw="0"></i>A0 命令句</span>
+      <span><i class="ct-sw dot" data-sw="1"></i>A3 描述語氣</span>
+    </div>
+    <div class="ct-chart" style="min-height: 30rem" data-draw="dumbbell" data-source="top_features"></div>
+  </section>
+
+  <section class="ct-card" id="regions">
+    <h2>依 prompt 段落與節點類型的直接歸因</h2>
+    <p class="ct-note">兩圖使用相同 x 軸刻度。最大的變化出現在決策位置的 transcoder feature。決策位置的 MLP 誤差節點在兩個條件下皆偏向呼叫，因此 A0 的呼叫決策只有部分能由替代模型解釋。</p>
+    <div class="ct-legend">
+      <span><i class="ct-sw" data-sw="0"></i>A0 命令句</span>
+      <span><i class="ct-sw" data-sw="1"></i>A3 描述語氣</span>
+    </div>
+    <div class="ct-grid">
+      <div>
+        <p class="ct-sub">transcoder feature</p>
+        <div class="ct-chart" style="min-height: 15rem" data-draw="regions" data-kind="transcoder feature" data-source="region_effect"></div>
+      </div>
+      <div>
+        <p class="ct-sub">MLP 誤差節點</p>
+        <div class="ct-chart" style="min-height: 15rem" data-draw="regions" data-kind="MLP 誤差" data-source="region_effect"></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="ct-up" id="upstream">
+    <h2 class="ct-section">兩個主要決策 feature 的上游分析</h2>
+    <p class="ct-lede">使用完整、未剪枝的鄰接矩陣（8,192 個選定 feature 加上誤差與 embedding 節點）分析輸入邊。最強的不呼叫 feature（L28#21276）與最強的呼叫 feature（L34#145627）在 A3 中都更為活躍，但不呼叫一方增加的直接歸因較多。兩者的輸入絕大多數來自同一（決策）位置上較低層的 feature；記憶段落對兩者幾乎沒有直接輸入。</p>
+    <section class="ct-card" id="up-both">
+      <h2>兩個 feature 的啟動值與直接歸因</h2>
+      <p class="ct-note">左：決策位置上的啟動值。右：對 logit(呼叫) − logit(不呼叫) 的直接歸因。兩個 feature 的啟動值從 A0 到 A3 都上升，但不呼叫方向歸因的增幅大於呼叫方向。</p>
+      <div class="ct-legend">
+        <span><i class="ct-sw" data-sw="0"></i>A0 命令句</span>
+        <span><i class="ct-sw" data-sw="1"></i>A3 描述語氣</span>
+      </div>
+      <div class="ct-grid">
+        <div>
+          <p class="ct-sub">啟動值</p>
+          <div class="ct-chart" style="min-height: 9rem" data-draw="upboth" data-metric="activation" data-source="upstream_target"></div>
+        </div>
+        <div>
+          <p class="ct-sub">直接歸因</p>
+          <div class="ct-chart" style="min-height: 9rem" data-draw="upboth" data-metric="direct" data-source="upstream_target"></div>
+        </div>
+      </div>
+    </section>
+
+    <h3 class="ct-subsection">L28#21276（不呼叫）</h3>
+    <div class="ct-grid">
+      <section class="ct-card" id="up-regions">
+        <h2>輸入來自哪些段落</h2>
+        <p class="ct-note">依來源段落加總的輸入邊權重（合併 feature、誤差節點與 embedding；游標移上可看分項）。A3 的增加大部分來自決策位置本身。記憶段落在 A0 提供少量負向輸入（落在誤差節點），在 A3 則約為零。</p>
+        <div class="ct-legend">
+          <span><i class="ct-sw" data-sw="0"></i>A0 命令句</span>
+          <span><i class="ct-sw" data-sw="1"></i>A3 描述語氣</span>
+        </div>
+        <div class="ct-chart" style="min-height: 15rem" data-draw="upregions" data-target="L28_21276" data-source="upstream_region"></div>
+      </section>
+      <section class="ct-card" id="up-sources">
+        <h2>變化最大的上游來源</h2>
+        <p class="ct-note">來源依 |Δ 邊權重| 排序。L27#41770 是主要的抑制性輸入，在 A3 中抑制更強，但激發性輸入增加得更多。最後一列是 harness 說明中空清單範例 <code>[]</code> token 上的 L23#151692；由於兩組前綴相同，其啟動值不變，因此邊權重的變化反映的是決策位置 attention 權重的重新分配。</p>
+        <div class="ct-legend">
+          <span><i class="ct-sw dot" data-sw="0"></i>A0 命令句</span>
+          <span><i class="ct-sw dot" data-sw="1"></i>A3 描述語氣</span>
+        </div>
+        <div class="ct-chart" style="min-height: 26rem" data-draw="upsources" data-target="L28_21276" data-source="upstream_sources"></div>
+      </section>
+    </div>
+
+    <h3 class="ct-subsection">L34#145627（呼叫）</h3>
+    <div class="ct-grid">
+      <section class="ct-card" id="up34-regions">
+        <h2>輸入來自哪些段落</h2>
+        <p class="ct-note">輸入幾乎全部來自決策位置；來自 harness 段落的輸入在 A3 中減少，記憶段落接近零。圖中節點只解釋此 feature 約一半的啟動值，其餘來自未被選入的 feature（8,192 個以外）與 bias。</p>
+        <div class="ct-legend">
+          <span><i class="ct-sw" data-sw="0"></i>A0 命令句</span>
+          <span><i class="ct-sw" data-sw="1"></i>A3 描述語氣</span>
+        </div>
+        <div class="ct-chart" style="min-height: 15rem" data-draw="upregions" data-target="L34_145627" data-source="upstream_region"></div>
+      </section>
+      <section class="ct-card" id="up34-sources">
+        <h2>變化最大的上游來源</h2>
+        <p class="ct-note">來源依 |Δ 邊權重| 排序。數個第 30–33 層的 feature（L33#37199、L30#133299、L31#148283、L32#5477）在 A3 中明顯更活躍，連帶推高了這個呼叫 feature。</p>
+        <div class="ct-legend">
+          <span><i class="ct-sw dot" data-sw="0"></i>A0 命令句</span>
+          <span><i class="ct-sw dot" data-sw="1"></i>A3 描述語氣</span>
+        </div>
+        <div class="ct-chart" style="min-height: 26rem" data-draw="upsources" data-target="L34_145627" data-source="upstream_sources"></div>
+      </section>
+    </div>
+  </section>
+
+  <section class="ct-card" id="limits">
+    <h2>限制與後續工作</h2>
+    <ul class="ct-list">
+      <li><b>單一案例。</b>僅一個 mutation（<code>promptintel-006.m05</code>）與一種 prompt 模式；需在更多 A0/A3 配對上驗證後，才能將這些共有的決策 feature 視為通用的工具呼叫 feature。</li>
+      <li><b>線性歸因與凍結 attention。</b>邊是在凍結 attention 與 normalisation 下的一階歸因，並非因果效果；經由 attention pattern 傳遞的影響不會以邊的形式呈現。</li>
+      <li><b>重建誤差。</b>決策位置的 MLP 誤差節點數值大，且在兩個條件下皆偏向呼叫，因此 A0 的部分行為超出替代模型的解釋範圍。</li>
+      <li><b>涵蓋率。</b>圖中僅保留約 65 萬個啟動 feature 中的 8,192 個；部分主要 feature（如 L34#145627）只有約一半的啟動值能由圖中節點解釋。</li>
+      <li><b>模型差異。</b>行為機率來自 bf16 greedy decoding，圖中的 logit 機率來自替代模型，兩者略有差異。</li>
+      <li><b>待完成。</b>Colab notebook 已備妥 feature intervention（消融／調控 L28#21276、L34#145627，交換決策位置的 feature 狀態）與 activation patching（attention 與 MLP 輸出、逐層 residual 掃描），用以因果檢驗「經由 attention 傳遞」的假設。</li>
+    </ul>
+  </section>
+
+  <section class="ct-card" id="table">
+    <h2>決策 feature 數值明細</h2>
+    <p class="ct-note">對 logit(呼叫) − logit(不呼叫) 的直接歸因，以及決策位置上的啟動值。Δ 為 A3 − A0（綠色：偏向呼叫，紅色：偏向不呼叫）。</p>
+    <div class="ct-table-box">
+      <table class="ct-table" data-source="top_features" data-row-key="feature">
+        <thead><tr>
+          <th data-field="feature">Feature</th>
+          <th data-field="a0_direct">A0 直接歸因</th>
+          <th data-field="a3_direct">A3 直接歸因</th>
+          <th data-field="change">Δ</th>
+          <th data-field="a0_act">A0 啟動值</th>
+          <th data-field="a3_act">A3 啟動值</th>
+        </tr></thead>
+        <tbody data-draw="table"></tbody>
+      </table>
+    </div>
+  </section>
+</div>
+<p class="page-foot">資料來源：circuit-tracer 對 Qwen3-8B（mwhanna/qwen3-8b-transcoders）產生的歸因圖，案例 promptintel-006.m05。所有數值皆嵌入於本頁，未連線任何外部資料。</p>
+</template>
+</main>
+<script>
+  window.ct = (() => {
+    const signed = d3.format('+.2f');
+    const rows = (id) => {
+      const d = dash.data(id);
+      return d.status === 'ok' ? d.data : null;
+    };
+    const color = (i) => dash.colors[i % dash.colors.length];
+    const measure = (svg, strs) => {
+      const t = svg.append('text').attr('visibility', 'hidden');
+      const w = d3.max(strs, (s) => { t.text(s); return t.node().getComputedTextLength(); }) || 0;
+      t.remove();
+      return w;
+    };
+    const failed = (el, id) => {
+      const s = dash.data(id).status;
+      el.replaceChildren();
+      if (s === 'error') {
+        const p = document.createElement('div');
+        p.style.cssText = 'display:flex;align-items:center;justify-content:center;gap:.5rem;height:100%;min-height:inherit;color:var(--color-fg-muted);font-size:var(--cds-font-size-caption)';
+        const dot = document.createElement('i');
+        dot.style.cssText = 'width:.375rem;height:.375rem;border-radius:50%;background:var(--color-bad)';
+        p.append(dot, document.createTextNode('Failed to load'));
+        el.append(p);
+      } else {
+        el.textContent = '—';
+      }
+    };
+    const tip = (el) => {
+      const t = document.createElement('div');
+      t.className = 'ct-tip';
+      t.hidden = true;
+      el.append(t);
+      return {
+        show(ev, lines) {
+          t.replaceChildren(...lines.map(([k, v, c]) => {
+            const row = document.createElement('div');
+            if (c) {
+              const sw = document.createElement('i');
+              sw.className = 'ct-sw';
+              sw.style.cssText = `background:${c};margin-right:.375rem`;
+              row.append(sw);
+            }
+            const ks = document.createElement('span');
+            ks.className = v === undefined ? 'k' : '';
+            ks.textContent = k;
+            row.append(ks);
+            if (v !== undefined) row.append(document.createTextNode('  ' + v));
+            return row;
+          }));
+          t.hidden = false;
+          const box = el.getBoundingClientRect();
+          const x = ev.clientX - box.left, y = ev.clientY - box.top;
+          const tw = t.offsetWidth, th = t.offsetHeight;
+          t.style.left = Math.max(0, Math.min(box.width - tw, x + 12)) + 'px';
+          t.style.top = Math.max(0, y - th - 8) + 'px';
+        },
+        hide() { t.hidden = true; },
+      };
+    };
+    return {signed, rows, color, measure, failed, tip};
+  })();
+
+  dash.onData(() => {
+    document.querySelectorAll('[data-sw]').forEach((s) => { s.style.background = ct.color(Number(s.dataset.sw)); });
+  });
+
+  const tileValue = (field, fmt) => (el) => {
+    const r = ct.rows('behavior');
+    const row = r && r.find((x) => x.set === el.dataset.where.split('=')[1]);
+    el.textContent = row ? fmt(Number(row[field])) : '—';
+  };
+  dash.draw('pcall', tileValue('p_call', d3.format('.1%')));
+  dash.draw('ldiff', tileValue('logit_diff', ct.signed));
+  dash.draw('gsum', tileValue('graph_direct_sum', ct.signed));
+</script>
+
+<script>
+  dash.draw('waterfall', (el) => {
+    const r = ct.rows('gap_waterfall');
+    if (!r) return ct.failed(el, 'gap_waterfall');
+    el.replaceChildren();
+    const data = r.map((d) => ({...d, order: Number(d.order), value: Number(d.value), from: Number(d.from), to: Number(d.to)}))
+      .sort((a, b) => a.order - b.order);
+    const W = el.clientWidth || 400, rowH = 30;
+    const svg = d3.select(el).append('svg').attr('width', '100%');
+    const labelW = ct.measure(svg, data.map((d) => d.label)) + 10;
+    const valW = ct.measure(svg, ['+0.00']) + 8;
+    const m = {top: 8, right: valW, bottom: 24, left: labelW};
+    const H = m.top + m.bottom + rowH * data.length;
+    svg.attr('viewBox', `0 0 ${W} ${H}`).attr('height', H);
+    const ext = d3.extent(data.flatMap((d) => [d.from, d.to, 0]));
+    const x = d3.scaleLinear(ext, [m.left + valW, W - m.right]).nice();
+    const y = d3.scaleBand(data.map((d) => d.step), [m.top, H - m.bottom]).padding(0.3);
+    svg.append('g').selectAll('line').data(x.ticks(5)).join('line')
+      .attr('x1', (d) => x(d)).attr('x2', (d) => x(d)).attr('y1', m.top).attr('y2', H - m.bottom)
+      .attr('stroke', 'var(--cds-chart-grid)');
+    svg.append('line').attr('x1', x(0)).attr('x2', x(0)).attr('y1', m.top).attr('y2', H - m.bottom)
+      .attr('stroke', 'var(--cds-chart-axis)');
+    svg.append('g').attr('transform', `translate(0,${H - m.bottom})`)
+      .call(d3.axisBottom(x).ticks(5).tickSize(0).tickPadding(8).tickFormat(d3.format('+')))
+      .attr('font-size', null).attr('font-family', null).call((g) => g.select('.domain').remove());
+    // connectors between steps
+    svg.append('g').selectAll('line').data(data.slice(0, -1)).join('line')
+      .attr('x1', (d) => x(d.to)).attr('x2', (d) => x(d.to))
+      .attr('y1', (d) => y(d.step) + y.bandwidth())
+      .attr('y2', (d, i) => y(data[i + 1].step))
+      .attr('stroke', 'var(--cds-chart-reference)').attr('stroke-dasharray', '2 2');
+    const t = ct.tip(el);
+    const fill = (d) => d.kind === 'total' ? 'var(--cds-chart-muted)' : d.value < 0 ? ct.color(1) : ct.color(0);
+    svg.append('g').selectAll('rect').data(data).join('rect')
+      .attr('x', (d) => x(Math.min(d.from, d.to))).attr('width', (d) => Math.max(2, Math.abs(x(d.to) - x(d.from))))
+      .attr('y', (d) => y(d.step)).attr('height', y.bandwidth()).attr('rx', 3)
+      .attr('fill', fill)
+      .on('mousemove', (ev, d) => t.show(ev, [[d.label], [L('value', '值'), ct.signed(d.value)], ...(d.kind === 'step' ? [[L('cumulative', '累計'), `${ct.signed(d.from)} → ${ct.signed(d.to)}`]] : [])]))
+      .on('mouseleave', () => t.hide());
+    svg.append('g').selectAll('text').data(data).join('text')
+      .attr('x', m.left - 10).attr('y', (d) => y(d.step) + y.bandwidth() / 2).attr('dy', '0.35em')
+      .attr('text-anchor', 'end').attr('class', (d) => d.kind === 'total' ? 'ct-strong' : null).text((d) => d.label);
+    svg.append('g').selectAll('text').data(data).join('text')
+      .attr('x', (d) => d.value < 0 ? x(Math.min(d.from, d.to)) - 6 : x(Math.max(d.from, d.to)) + 6)
+      .attr('text-anchor', (d) => d.value < 0 ? 'end' : 'start')
+      .attr('y', (d) => y(d.step) + y.bandwidth() / 2).attr('dy', '0.35em')
+      .attr('class', 'ct-strong').text((d) => ct.signed(d.value));
+    el.style.minHeight = H + 'px';
+  });
+
+  dash.draw('edges', (el) => {
+    const r = ct.rows('edge_share');
+    if (!r) return ct.failed(el, 'edge_share');
+    el.replaceChildren();
+    const regions = ['asst', 'harness', 'turn2', 'memory'];
+    const sets = [...new Set(r.map((d) => d.set))];
+    const W = el.clientWidth || 400, rowH = 34;
+    const svg = d3.select(el).append('svg').attr('width', '100%');
+    const labelW = ct.measure(svg, r.map((d) => d.label)) + 10;
+    const m = {top: 4, right: 8, bottom: 24, left: labelW};
+    const H = m.top + m.bottom + rowH * sets.length;
+    svg.attr('viewBox', `0 0 ${W} ${H}`).attr('height', H);
+    const x = d3.scaleLinear([0, 1], [m.left, W - m.right]);
+    const y = d3.scaleBand(sets, [m.top, H - m.bottom]).padding(0.25);
+    svg.append('g').attr('transform', `translate(0,${H - m.bottom})`)
+      .call(d3.axisBottom(x).ticks(4).tickSize(0).tickPadding(8).tickFormat(d3.format('.0%')))
+      .attr('font-size', null).attr('font-family', null).call((g) => g.select('.domain').remove());
+    const t = ct.tip(el);
+    sets.forEach((s) => {
+      let acc = 0;
+      const segs = regions.map((rg, i) => {
+        const row = r.find((d) => d.set === s && d.region === rg);
+        const v = row ? Number(row.share) : 0;
+        const seg = {s, rg, i, v, x0: acc, label: row ? row.label : s, rl: row ? row.region_label : rg};
+        acc += v;
+        return seg;
+      });
+      svg.append('g').selectAll('rect').data(segs).join('rect')
+        .attr('x', (d) => x(d.x0) + (d.i ? 1 : 0)).attr('width', (d) => Math.max(0, x(d.x0 + d.v) - x(d.x0) - (d.i ? 1 : 0)))
+        .attr('y', y(s)).attr('height', y.bandwidth()).attr('rx', 2)
+        .attr('fill', (d) => ct.color(d.i + 2))
+        .on('mousemove', (ev, d) => t.show(ev, [[d.label], [d.rl, d3.format('.1%')(d.v), ct.color(d.i + 2)]]))
+        .on('mouseleave', () => t.hide());
+      svg.append('text').attr('x', m.left - 10).attr('y', y(s) + y.bandwidth() / 2).attr('dy', '0.35em')
+        .attr('text-anchor', 'end').attr('class', 'ct-strong').text(segs[0].label);
+    });
+    el.style.minHeight = H + 'px';
+  });
+</script>
+
+<script>
+  dash.draw('dumbbell', (el) => {
+    const r = ct.rows('top_features');
+    if (!r) return ct.failed(el, 'top_features');
+    el.replaceChildren();
+    const data = r.map((d) => ({...d, a0: Number(d.a0_direct), a3: Number(d.a3_direct), act0: Number(d.a0_act), act3: Number(d.a3_act)}));
+    const W = el.clientWidth || 600, rowH = 22;
+    const svg = d3.select(el).append('svg').attr('width', '100%');
+    const labelW = ct.measure(svg, data.map((d) => d.feature)) + 10;
+    const m = {top: 22, right: 16, bottom: 24, left: labelW};
+    const H = m.top + m.bottom + rowH * data.length;
+    svg.attr('viewBox', `0 0 ${W} ${H}`).attr('height', H);
+    const lim = d3.max(data, (d) => Math.max(Math.abs(d.a0), Math.abs(d.a3)));
+    const x = d3.scaleLinear([-lim, lim], [m.left, W - m.right]).nice();
+    const y = d3.scaleBand(data.map((d) => d.feature), [m.top, H - m.bottom]).padding(0.4);
+    svg.append('g').selectAll('line').data(x.ticks(6)).join('line')
+      .attr('x1', (d) => x(d)).attr('x2', (d) => x(d)).attr('y1', m.top).attr('y2', H - m.bottom)
+      .attr('stroke', (d) => d === 0 ? 'var(--cds-chart-axis)' : 'var(--cds-chart-grid)');
+    svg.append('g').attr('transform', `translate(0,${H - m.bottom})`)
+      .call(d3.axisBottom(x).ticks(6).tickSize(0).tickPadding(8).tickFormat(d3.format('+')))
+      .attr('font-size', null).attr('font-family', null).call((g) => g.select('.domain').remove());
+    svg.append('text').attr('x', x(0) - 8).attr('y', 10).attr('text-anchor', 'end').text(L('← toward no call', '← 偏向不呼叫'));
+    svg.append('text').attr('x', x(0) + 8).attr('y', 10).attr('text-anchor', 'start').text(L('toward call →', '偏向呼叫 →'));
+    const t = ct.tip(el);
+    const g = svg.append('g').selectAll('g').data(data).join('g')
+      .attr('transform', (d) => `translate(0,${y(d.feature) + y.bandwidth() / 2})`);
+    g.append('rect').attr('x', m.left).attr('width', W - m.left - m.right).attr('y', -rowH / 2).attr('height', rowH)
+      .attr('fill', 'transparent')
+      .on('mousemove', (ev, d) => t.show(ev, [[d.feature], ['A0', `${ct.signed(d.a0)}  (${L('act.', '啟動值')} ${d.act0})`, ct.color(0)], ['A3', `${ct.signed(d.a3)}  (${L('act.', '啟動值')} ${d.act3})`, ct.color(1)], [L('change', '變化'), ct.signed(d.a3 - d.a0)]]))
+      .on('mouseleave', () => t.hide());
+    g.append('line').attr('x1', (d) => x(d.a0)).attr('x2', (d) => x(d.a3))
+      .attr('stroke', 'var(--cds-chart-reference)').attr('stroke-width', 2).attr('pointer-events', 'none');
+    g.append('circle').attr('cx', (d) => x(d.a0)).attr('r', 4.5).attr('fill', ct.color(0))
+      .attr('stroke', 'var(--color-panel)').attr('stroke-width', 2).attr('pointer-events', 'none');
+    g.append('circle').attr('cx', (d) => x(d.a3)).attr('r', 4.5).attr('fill', ct.color(1))
+      .attr('stroke', 'var(--color-panel)').attr('stroke-width', 2).attr('pointer-events', 'none');
+    g.append('text').attr('x', m.left - 10).attr('dy', '0.35em').attr('text-anchor', 'end')
+      .attr('class', 'ct-strong').text((d) => d.feature);
+    el.style.minHeight = H + 'px';
+  });
+
+  dash.draw('regions', (el) => {
+    const r = ct.rows('region_effect');
+    if (!r) return ct.failed(el, 'region_effect');
+    el.replaceChildren();
+    const all = r.map((d) => ({...d, v: Number(d.direct)}));
+    const lim = d3.max(all, (d) => Math.abs(d.v));
+    const data = all.filter((d) => d.node_type === el.dataset.kind);
+    const regions = [...new Set(all.map((d) => d.region))];
+    const label = Object.fromEntries(all.map((d) => [d.region, d.region_label]));
+    const sets = ['A0', 'A3'];
+    const W = el.clientWidth || 360, rowH = 40;
+    const svg = d3.select(el).append('svg').attr('width', '100%');
+    const labelW = ct.measure(svg, Object.values(label)) + 10;
+    const valW = ct.measure(svg, ['+0.00']) + 6;
+    const m = {top: 4, right: valW, bottom: 24, left: labelW + valW};
+    const H = m.top + m.bottom + rowH * regions.length;
+    svg.attr('viewBox', `0 0 ${W} ${H}`).attr('height', H);
+    const x = d3.scaleLinear([-lim, lim], [m.left, W - m.right]).nice();
+    const y = d3.scaleBand(regions, [m.top, H - m.bottom]).padding(0.2);
+    const ys = d3.scaleBand(sets, [0, y.bandwidth()]).padding(0.15);
+    svg.append('g').selectAll('line').data(x.ticks(4)).join('line')
+      .attr('x1', (d) => x(d)).attr('x2', (d) => x(d)).attr('y1', m.top).attr('y2', H - m.bottom)
+      .attr('stroke', (d) => d === 0 ? 'var(--cds-chart-axis)' : 'var(--cds-chart-grid)');
+    svg.append('g').attr('transform', `translate(0,${H - m.bottom})`)
+      .call(d3.axisBottom(x).ticks(4).tickSize(0).tickPadding(8).tickFormat(d3.format('+')))
+      .attr('font-size', null).attr('font-family', null).call((g) => g.select('.domain').remove());
+    const t = ct.tip(el);
+    svg.append('g').selectAll('rect').data(data).join('rect')
+      .attr('x', (d) => x(Math.min(0, d.v))).attr('width', (d) => Math.max(1, Math.abs(x(d.v) - x(0))))
+      .attr('y', (d) => y(d.region) + ys(d.set)).attr('height', ys.bandwidth()).attr('rx', 2)
+      .attr('fill', (d) => ct.color(sets.indexOf(d.set)))
+      .on('mousemove', (ev, d) => t.show(ev, [[`${d.region_label} · ${d.node_type}`], [d.set, ct.signed(d.v), ct.color(sets.indexOf(d.set))]]))
+      .on('mouseleave', () => t.hide());
+    svg.append('g').selectAll('text').data(data).join('text')
+      .attr('x', (d) => d.v < 0 ? x(d.v) - 4 : x(d.v) + 4).attr('text-anchor', (d) => d.v < 0 ? 'end' : 'start')
+      .attr('y', (d) => y(d.region) + ys(d.set) + ys.bandwidth() / 2).attr('dy', '0.35em')
+      .text((d) => ct.signed(d.v));
+    svg.append('g').selectAll('text').data(regions).join('text')
+      .attr('x', labelW - 10).attr('y', (d) => y(d) + y.bandwidth() / 2).attr('dy', '0.35em')
+      .attr('text-anchor', 'end').attr('class', 'ct-strong').text((d) => label[d]);
+    el.style.minHeight = H + 'px';
+  });
+
+  dash.draw('upboth', (el) => {
+    const r = ct.rows('upstream_target');
+    if (!r) return ct.failed(el, 'upstream_target');
+    el.replaceChildren();
+    const metric = el.dataset.metric;
+    const fmt = metric === 'direct' ? ct.signed : d3.format('.1f');
+    const data = r.map((d) => ({...d, v: Number(d[metric])}));
+    const feats = [...new Set(data.map((d) => d.feature))];
+    const side = Object.fromEntries(data.map((d) => [d.feature, d.side]));
+    const rowLabel = (f) => `${f}（${side[f]}）`;
+    const sets = ['A0', 'A3'];
+    const W = el.clientWidth || 360, rowH = 44;
+    const svg = d3.select(el).append('svg').attr('width', '100%');
+    const labelW = ct.measure(svg, feats.map(rowLabel)) + 10;
+    const valW = ct.measure(svg, ['+000.0']) + 6;
+    const lo = Math.min(0, d3.min(data, (d) => d.v)), hi = Math.max(0, d3.max(data, (d) => d.v));
+    const m = {top: 4, right: hi > 0 ? valW : 8, bottom: 24, left: labelW + (lo < 0 ? valW : 0)};
+    const H = m.top + m.bottom + rowH * feats.length;
+    svg.attr('viewBox', `0 0 ${W} ${H}`).attr('height', H);
+    const x = d3.scaleLinear([lo, hi], [m.left, W - m.right]).nice();
+    const y = d3.scaleBand(feats, [m.top, H - m.bottom]).padding(0.2);
+    const ys = d3.scaleBand(sets, [0, y.bandwidth()]).padding(0.15);
+    svg.append('g').selectAll('line').data(x.ticks(4)).join('line')
+      .attr('x1', (d) => x(d)).attr('x2', (d) => x(d)).attr('y1', m.top).attr('y2', H - m.bottom)
+      .attr('stroke', (d) => d === 0 ? 'var(--cds-chart-axis)' : 'var(--cds-chart-grid)');
+    svg.append('g').attr('transform', `translate(0,${H - m.bottom})`)
+      .call(d3.axisBottom(x).ticks(4).tickSize(0).tickPadding(8).tickFormat(metric === 'direct' ? d3.format('+') : d3.format('d')))
+      .attr('font-size', null).attr('font-family', null).call((g) => g.select('.domain').remove());
+    const t = ct.tip(el);
+    svg.append('g').selectAll('rect').data(data).join('rect')
+      .attr('x', (d) => x(Math.min(0, d.v))).attr('width', (d) => Math.max(1, Math.abs(x(d.v) - x(0))))
+      .attr('y', (d) => y(d.feature) + ys(d.set)).attr('height', ys.bandwidth()).attr('rx', 2)
+      .attr('fill', (d) => ct.color(sets.indexOf(d.set)))
+      .on('mousemove', (ev, d) => t.show(ev, [[rowLabel(d.feature)], [d.set, fmt(d.v), ct.color(sets.indexOf(d.set))],
+        [L('summed input', '輸入加總'), ct.signed(Number(d.input_sum))]]))
+      .on('mouseleave', () => t.hide());
+    svg.append('g').selectAll('text').data(data).join('text')
+      .attr('x', (d) => d.v < 0 ? x(d.v) - 4 : x(d.v) + 4).attr('text-anchor', (d) => d.v < 0 ? 'end' : 'start')
+      .attr('y', (d) => y(d.feature) + ys(d.set) + ys.bandwidth() / 2).attr('dy', '0.35em')
+      .text((d) => fmt(d.v));
+    svg.append('g').selectAll('text').data(feats).join('text')
+      .attr('x', labelW - 10).attr('y', (d) => y(d) + y.bandwidth() / 2).attr('dy', '0.35em')
+      .attr('text-anchor', 'end').attr('class', 'ct-strong').text(rowLabel);
+    el.style.minHeight = H + 'px';
+  });
+
+  dash.draw('upregions', (el) => {
+    const r = ct.rows('upstream_region');
+    if (!r) return ct.failed(el, 'upstream_region');
+    el.replaceChildren();
+    const data = r.filter((d) => d.target === el.dataset.target)
+      .map((d) => ({...d, v: Number(d.total), f: Number(d.feature), e: Number(d.error), t: Number(d.token)}));
+    const regions = [...new Set(data.map((d) => d.region))];
+    const sets = ['A0', 'A3'];
+    const W = el.clientWidth || 360, rowH = 40;
+    const svg = d3.select(el).append('svg').attr('width', '100%');
+    const labelW = ct.measure(svg, regions) + 10;
+    const valW = ct.measure(svg, ['+00.00']) + 6;
+    const m = {top: 4, right: valW, bottom: 24, left: labelW + valW};
+    const H = m.top + m.bottom + rowH * regions.length;
+    svg.attr('viewBox', `0 0 ${W} ${H}`).attr('height', H);
+    const x = d3.scaleLinear([Math.min(0, d3.min(data, (d) => d.v)), d3.max(data, (d) => d.v)], [m.left, W - m.right]).nice();
+    const y = d3.scaleBand(regions, [m.top, H - m.bottom]).padding(0.2);
+    const ys = d3.scaleBand(sets, [0, y.bandwidth()]).padding(0.15);
+    svg.append('g').selectAll('line').data(x.ticks(5)).join('line')
+      .attr('x1', (d) => x(d)).attr('x2', (d) => x(d)).attr('y1', m.top).attr('y2', H - m.bottom)
+      .attr('stroke', (d) => d === 0 ? 'var(--cds-chart-axis)' : 'var(--cds-chart-grid)');
+    svg.append('g').attr('transform', `translate(0,${H - m.bottom})`)
+      .call(d3.axisBottom(x).ticks(5).tickSize(0).tickPadding(8).tickFormat(d3.format('+')))
+      .attr('font-size', null).attr('font-family', null).call((g) => g.select('.domain').remove());
+    const t = ct.tip(el);
+    svg.append('g').selectAll('rect').data(data).join('rect')
+      .attr('x', (d) => x(Math.min(0, d.v))).attr('width', (d) => Math.max(1, Math.abs(x(d.v) - x(0))))
+      .attr('y', (d) => y(d.region) + ys(d.set)).attr('height', ys.bandwidth()).attr('rx', 2)
+      .attr('fill', (d) => ct.color(sets.indexOf(d.set)))
+      .on('mousemove', (ev, d) => t.show(ev, [[`${d.region} · ${d.set}`], [L('total', '合計'), ct.signed(d.v), ct.color(sets.indexOf(d.set))],
+        ['feature', ct.signed(d.f)], [L('error', '誤差'), ct.signed(d.e)], ['embedding', ct.signed(d.t)]]))
+      .on('mouseleave', () => t.hide());
+    svg.append('g').selectAll('text').data(data).join('text')
+      .attr('x', (d) => d.v < 0 ? x(d.v) - 4 : x(d.v) + 4).attr('text-anchor', (d) => d.v < 0 ? 'end' : 'start')
+      .attr('y', (d) => y(d.region) + ys(d.set) + ys.bandwidth() / 2).attr('dy', '0.35em')
+      .text((d) => ct.signed(d.v));
+    svg.append('g').selectAll('text').data(regions).join('text')
+      .attr('x', labelW - 10).attr('y', (d) => y(d) + y.bandwidth() / 2).attr('dy', '0.35em')
+      .attr('text-anchor', 'end').attr('class', 'ct-strong').text((d) => d);
+    el.style.minHeight = H + 'px';
+  });
+
+  dash.draw('upsources', (el) => {
+    const r = ct.rows('upstream_sources');
+    if (!r) return ct.failed(el, 'upstream_sources');
+    el.replaceChildren();
+    const data = r.filter((d) => d.target === el.dataset.target)
+      .map((d) => ({...d, a0: Number(d.a0), a3: Number(d.a3), act0: Number(d.a0_act), act3: Number(d.a3_act)}));
+    const W = el.clientWidth || 400, rowH = 22;
+    const svg = d3.select(el).append('svg').attr('width', '100%');
+    const labelW = ct.measure(svg, data.map((d) => d.source)) + 10;
+    const m = {top: 22, right: 16, bottom: 24, left: labelW};
+    const H = m.top + m.bottom + rowH * data.length;
+    svg.attr('viewBox', `0 0 ${W} ${H}`).attr('height', H);
+    const ext = d3.extent(data.flatMap((d) => [d.a0, d.a3, 0]));
+    const x = d3.scaleLinear(ext, [m.left, W - m.right]).nice();
+    const y = d3.scaleBand(data.map((d) => d.source), [m.top, H - m.bottom]).padding(0.4);
+    svg.append('g').selectAll('line').data(x.ticks(5)).join('line')
+      .attr('x1', (d) => x(d)).attr('x2', (d) => x(d)).attr('y1', m.top).attr('y2', H - m.bottom)
+      .attr('stroke', (d) => d === 0 ? 'var(--cds-chart-axis)' : 'var(--cds-chart-grid)');
+    svg.append('g').attr('transform', `translate(0,${H - m.bottom})`)
+      .call(d3.axisBottom(x).ticks(5).tickSize(0).tickPadding(8).tickFormat(d3.format('+')))
+      .attr('font-size', null).attr('font-family', null).call((g) => g.select('.domain').remove());
+    svg.append('text').attr('x', x(0) - 8).attr('y', 10).attr('text-anchor', 'end').text(L('← inhibitory', '← 抑制'));
+    svg.append('text').attr('x', x(0) + 8).attr('y', 10).attr('text-anchor', 'start').text(L('excitatory →', '激發 →'));
+    const t = ct.tip(el);
+    const g = svg.append('g').selectAll('g').data(data).join('g')
+      .attr('transform', (d) => `translate(0,${y(d.source) + y.bandwidth() / 2})`);
+    g.append('rect').attr('x', m.left).attr('width', W - m.left - m.right).attr('y', -rowH / 2).attr('height', rowH)
+      .attr('fill', 'transparent')
+      .on('mousemove', (ev, d) => t.show(ev, [[`${d.source} · ${d.region}`],
+        ['A0', `${ct.signed(d.a0)}${d.kind === 'feature' ? `  (${L('act.', '啟動值')} ${d.act0})` : ''}`, ct.color(0)],
+        ['A3', `${ct.signed(d.a3)}${d.kind === 'feature' ? `  (${L('act.', '啟動值')} ${d.act3})` : ''}`, ct.color(1)],
+        [L('change', '變化'), ct.signed(d.a3 - d.a0)]]))
+      .on('mouseleave', () => t.hide());
+    g.append('line').attr('x1', (d) => x(d.a0)).attr('x2', (d) => x(d.a3))
+      .attr('stroke', 'var(--cds-chart-reference)').attr('stroke-width', 2).attr('pointer-events', 'none');
+    g.append('circle').attr('cx', (d) => x(d.a0)).attr('r', 4.5).attr('fill', ct.color(0))
+      .attr('stroke', 'var(--color-panel)').attr('stroke-width', 2).attr('pointer-events', 'none');
+    g.append('circle').attr('cx', (d) => x(d.a3)).attr('r', 4.5).attr('fill', ct.color(1))
+      .attr('stroke', 'var(--color-panel)').attr('stroke-width', 2).attr('pointer-events', 'none');
+    g.append('text').attr('x', m.left - 10).attr('dy', '0.35em').attr('text-anchor', 'end')
+      .attr('class', 'ct-strong').text((d) => d.source);
+    el.style.minHeight = H + 'px';
+  });
+
+  dash.draw('table', (tb) => {
+    const r = ct.rows('top_features');
+    tb.replaceChildren();
+    if (!r) return;
+    const cols = ['feature', 'a0_direct', 'a3_direct', 'change', 'a0_act', 'a3_act'];
+    r.forEach((d) => {
+      const tr = document.createElement('tr');
+      cols.forEach((c) => {
+        const td = document.createElement('td');
+        if (c === 'feature') td.textContent = d[c];
+        else if (c.endsWith('act')) td.textContent = d3.format('.2f')(Number(d[c]));
+        else {
+          const v = Number(d[c]);
+          td.textContent = ct.signed(v);
+          if (c === 'change') td.className = v > 0.05 ? 'ct-pos' : v < -0.05 ? 'ct-neg' : '';
+        }
+        tr.append(td);
+      });
+      tb.append(tr);
+    });
+  });
+</script>
+
+<script>
+  window.ctView = 'A0';
+  document.addEventListener('click', (ev) => {
+    const b = ev.target.closest('.ct-seg-btn');
+    if (!b) return;
+    window.ctView = b.dataset.view;
+    document.querySelectorAll('.ct-seg-btn').forEach((x) => x.setAttribute('aria-pressed', String(x === b)));
+    dash.draw('circuit');
+  });
+
+  dash.draw('circuit', (el) => {
+    const nr = ct.rows('circuit_nodes'), er = ct.rows('circuit_edges');
+    if (!nr || !er) return ct.failed(el, nr ? 'circuit_edges' : 'circuit_nodes');
+    el.replaceChildren();
+    const view = window.ctView || 'A0';
+    const num = (x) => (x === '' || x == null ? null : Number(x));
+    const nodes = nr.map((d) => {
+      const a0 = num(d.a0_direct), a3 = num(d.a3_direct);
+      return {...d, layer: Number(d.layer), act0: num(d.a0_act), act3: num(d.a3_act), dir0: a0, dir3: a3,
+        p0: num(d.a0_prob), p3: num(d.a3_prob), present: view === 'diff' ? true : d[`${view.toLowerCase()}_present`] === '1',
+        dir: view === 'A0' ? a0 : view === 'A3' ? a3 : (a3 ?? 0) - (a0 ?? 0),
+        act: view === 'A0' ? num(d.a0_act) : view === 'A3' ? num(d.a3_act) : Math.max(num(d.a0_act) || 0, num(d.a3_act) || 0)};
+    });
+    const byId = new Map(nodes.map((n) => [n.id, n]));
+    const edges = er.map((d) => ({...d, w: view === 'A0' ? Number(d.a0) : view === 'A3' ? Number(d.a3) : Number(d.change)}))
+      .filter((e) => byId.has(e.source) && byId.has(e.target) && e.w !== 0);
+    const maxIn = d3.rollup(edges, (v) => d3.max(v, (e) => Math.abs(e.w)), (e) => e.target);
+    edges.forEach((e) => { e.rel = Math.abs(e.w) / (maxIn.get(e.target) || 1); });
+    const shown = edges.filter((e) => e.rel >= 0.12);
+
+    const W = el.clientWidth || 700;
+    const layers = [...new Set(nodes.map((n) => n.layer))].sort((a, b) => b - a);
+    const rowH = 46, m = {top: 18, right: 16, bottom: 18, left: 44};
+    const H = m.top + m.bottom + rowH * (layers.length - 1);
+    const svg = d3.select(el).append('svg').attr('width', '100%').attr('viewBox', `0 0 ${W} ${H}`).attr('height', H);
+    const y = d3.scalePoint(layers, [m.top, H - m.bottom]);
+    const harnessW = Math.max(70, (W - m.left - m.right) * 0.16);
+    const x0 = m.left + harnessW, x1 = W - m.right;
+    // place nodes: harness span on the left column, final-position nodes spread per layer by direct attribution
+    d3.group(nodes, (n) => n.layer).forEach((row) => {
+      const main = row.filter((n) => n.region === 'last').sort((a, b) => (a.dir0 ?? (a.feature === 'logit' ? 0 : 0)) - (b.dir0 ?? 0));
+      if (main.length && main[0].kind === 'logit') main.sort((a, b) => (a.id === 'nocall' ? -1 : 1) - (b.id === 'nocall' ? -1 : 1));
+      const shift = main[0] && main[0].kind === 'logit' ? 0 : (main[0] ? main[0].layer % 2 : 0) ? 0.22 : -0.22;  // stagger rows so columns don't stack
+      main.forEach((n, i) => { n.x = x0 + (x1 - x0) * (i + 1 + shift) / (main.length + 1); });
+      row.filter((n) => n.region !== 'last').forEach((n, i) => { n.x = m.left + harnessW / 2 + i * 14; });
+      row.forEach((n) => { n.y = y(n.layer); });
+    });
+    svg.append('line').attr('x1', x0 - 6).attr('x2', x0 - 6).attr('y1', 4).attr('y2', H - 4)
+      .attr('stroke', 'var(--cds-chart-grid)').attr('stroke-dasharray', '3 3');
+    svg.append('text').attr('x', m.left + harnessW / 2).attr('y', 10).attr('text-anchor', 'middle').text(L('harness [] (pos 159)', 'harness 範例 []（位置 159）'));
+    svg.append('text').attr('x', (x0 + x1) / 2).attr('y', 10).attr('text-anchor', 'middle').text(L('decision position ":', '決策位置 ":'));
+    svg.append('g').selectAll('text').data(layers).join('text')
+      .attr('x', 4).attr('y', (l) => y(l)).attr('dy', '0.35em').text((l) => (l === 36 ? 'logit' : `L${l}`));
+    svg.append('g').selectAll('line').data(layers).join('line')
+      .attr('x1', m.left - 4).attr('x2', W - m.right).attr('y1', (l) => y(l)).attr('y2', (l) => y(l))
+      .attr('stroke', 'var(--cds-chart-grid)').attr('stroke-opacity', 0.5);
+
+    const callC = ct.color(2), noC = ct.color(3);
+    const actMax = d3.max(nodes, (n) => n.act || 0) || 1;
+    const r = (n) => (n.kind === 'logit' ? 9 : 3.5 + 8 * Math.sqrt((n.act || 0) / actMax));
+    const path = (e) => {
+      const s = byId.get(e.source), t = byId.get(e.target);
+      const dy = (t.y - s.y) / 2;
+      return `M${s.x},${s.y} C${s.x},${s.y + dy} ${t.x},${t.y - dy} ${t.x},${t.y}`;
+    };
+    const eg = svg.append('g').attr('fill', 'none');
+    const ePaths = eg.selectAll('path').data(shown.sort((a, b) => a.rel - b.rel)).join('path')
+      .attr('d', path)
+      .attr('stroke', (e) => (e.w < 0 ? 'var(--color-bad)' : 'var(--color-fg-muted)'))
+      .attr('stroke-dasharray', (e) => (e.w < 0 ? '4 3' : null))
+      .attr('stroke-width', (e) => 0.6 + 4 * e.rel)
+      .attr('stroke-opacity', (e) => 0.15 + 0.55 * e.rel);
+    const t = ct.tip(el);
+    const fmt = d3.format('+.3f');
+    const nodeG = svg.append('g').selectAll('g').data(nodes).join('g')
+      .attr('transform', (n) => `translate(${n.x},${n.y})`)
+      .attr('opacity', (n) => (n.present ? 1 : 0.25));
+    nodeG.append('circle').attr('r', r)
+      .attr('fill', (n) => (n.kind === 'logit' ? (n.id === 'call' ? callC : noC) : (n.dir ?? 0) >= 0 ? callC : noC))
+      .attr('fill-opacity', (n) => (n.kind === 'logit' ? 1 : 0.35 + 0.65 * Math.min(1, Math.abs(n.dir ?? 0) / 1.5)))
+      .attr('stroke', 'var(--color-panel)').attr('stroke-width', 2);
+    nodeG.append('text').attr('class', 'ct-node-label').attr('y', (n) => r(n) + 10).attr('text-anchor', 'middle')
+      .text((n) => n.label);
+    nodeG.append('circle').attr('r', (n) => Math.max(12, r(n) + 4)).attr('fill', 'transparent')
+      .on('mousemove', (ev, n) => {
+        ePaths.attr('stroke-opacity', (e) => (e.source === n.id || e.target === n.id ? 0.3 + 0.7 * e.rel : 0.04));
+        const lines = [[`${n.label}${n.kind === 'logit' ? '' : ` · L${n.layer} · ${n.token}`}`]];
+        if (n.kind === 'logit') {
+          lines.push(['p (A0)', d3.format('.3f')(n.p0), ct.color(0)], ['p (A3)', d3.format('.3f')(n.p3), ct.color(1)]);
+        } else {
+          lines.push(['A0', `${L('direct', '直接歸因')} ${n.dir0 == null ? '—' : fmt(n.dir0)} · ${L('act.', '啟動值')} ${n.act0 ?? '—'}`, ct.color(0)],
+            ['A3', `${L('direct', '直接歸因')} ${n.dir3 == null ? '—' : fmt(n.dir3)} · ${L('act.', '啟動值')} ${n.act3 ?? '—'}`, ct.color(1)]);
+        }
+        t.show(ev, lines);
+      })
+      .on('mouseleave', () => { ePaths.attr('stroke-opacity', (e) => 0.15 + 0.55 * e.rel); t.hide(); });
+    el.style.minHeight = H + 'px';
+  });
+</script>
+<script>
+  (() => {
+    const TITLES = {"en": "A0 vs A3 Attribution Graph Analysis", "zh": "A0 vs A3 歸因圖分析"};
+    const btn = document.getElementById('lang-toggle');
+    const content = document.getElementById('content');
+    const show = (lang) => {
+      window.LANG = lang;
+      content.replaceChildren(document.getElementById('tpl-' + lang).content.cloneNode(true));
+      document.documentElement.lang = lang === 'zh' ? 'zh-Hant' : 'en';
+      document.title = TITLES[lang];
+      btn.querySelector('.lang-cur').textContent = lang === 'zh' ? '中文' : 'English';
+      btn.querySelector('.lang-alt').textContent = lang === 'zh' ? '→ English' : '→ 中文';
+      btn.setAttribute('aria-label', lang === 'zh' ? 'Switch to English' : '切換為中文');
+      document.querySelectorAll('.ct-seg-btn').forEach((x) => x.setAttribute('aria-pressed', String(x.dataset.view === (window.ctView || 'A0'))));
+      try { localStorage.setItem('lang', lang); } catch (e) {}
+      dash._all();
+    };
+    let start = 'en';
+    try { start = localStorage.getItem('lang') || 'en'; } catch (e) {}
+    if (location.hash === '#zh') start = 'zh';
+    if (location.hash === '#en') start = 'en';
+    btn.addEventListener('click', () => show(window.LANG === 'zh' ? 'en' : 'zh'));
+    show(start);
+  })();
+</script>
+</body>
+</html>
