@@ -163,7 +163,7 @@
     <dl class="ct-setup">
       <div><dt>Model</dt><dd>Qwen/Qwen3-8B (bf16), Ollama chat template, <code>/no_think</code>, no system prompt (<code>none</code> mode)</dd></div>
       <div><dt>Replacement model</dt><dd><code>mwhanna/qwen3-8b-transcoders</code> (per-layer transcoders), circuit-tracer, TransformerLens backend, lazy encoder/decoder</dd></div>
-      <div><dt>Attribution</dt><dd>targets: logit(<code>[</code>) and logit(<code>[]</code>) at the decision position (tokens: space + <code>[</code> + newline, id 2278; space + <code>[]</code> + newline, id 4167); <code>max_feature_nodes</code> 8192, <code>batch_size</code> 16; pruned graphs exported with node threshold 0.8, edge threshold 0.98</dd></div>
+      <div><dt>Attribution</dt><dd>targets: the logits of two tokens at the decision position, the call token <code>[</code> (space + [ + newline, id 2278) and the no-call token <code>[]</code> (space + [] + newline, id 4167); <code>max_feature_nodes</code> 8192, <code>batch_size</code> 16; pruned graphs exported with node threshold 0.8, edge threshold 0.98</dd></div>
       <div><dt>Metric</dt><dd>direct attribution = Σ edge weights into logit(call) − Σ into logit(no call); features matched across conditions by (layer, index, position from end), or absolute position inside the shared prefix</dd></div>
     </dl>
   </header>
@@ -356,7 +356,7 @@
     <dl class="ct-setup">
       <div><dt>模型</dt><dd>Qwen/Qwen3-8B（bf16），Ollama chat template，<code>/no_think</code>，不含 system prompt（<code>none</code> 模式）</dd></div>
       <div><dt>替代模型</dt><dd><code>mwhanna/qwen3-8b-transcoders</code>（逐層 transcoder），circuit-tracer，TransformerLens 後端，lazy encoder/decoder</dd></div>
-      <div><dt>歸因設定</dt><dd>目標為決策位置上的 logit(<code>[</code>) 與 logit(<code>[]</code>)，實際 token 分別是「空格 + <code>[</code> + 換行」（id 2278）與「空格 + <code>[]</code> + 換行」（id 4167）；<code>max_feature_nodes</code> 8192，<code>batch_size</code> 16；剪枝圖以 node threshold 0.8、edge threshold 0.98 匯出</dd></div>
+      <div><dt>歸因設定</dt><dd>目標為決策位置上兩個 token 的 logit：呼叫 token <code>[</code>（空格 + [ + 換行，id 2278）與不呼叫 token <code>[]</code>（空格 + [] + 換行，id 4167）；<code>max_feature_nodes</code> 8192，<code>batch_size</code> 16；剪枝圖以 node threshold 0.8、edge threshold 0.98 匯出</dd></div>
       <div><dt>指標</dt><dd>直接歸因 = 連入 logit(呼叫) 的邊權重總和 − 連入 logit(不呼叫) 的邊權重總和；跨條件的 feature 以（層、編號、距結尾位置）對齊，共同前綴內則以絕對位置對齊</dd></div>
     </dl>
   </header>
